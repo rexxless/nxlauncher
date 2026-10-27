@@ -27,6 +27,7 @@ public struct Preflight: Sendable {
     public enum EngineSource: Equatable, Sendable {
         case bundled(version: String)
         case unpacking
+        case updating
         case failed(String)
         case custom
     }
@@ -79,6 +80,7 @@ public struct Preflight: Sendable {
     static func engineCheck(checkout: URL?, source: EngineSource) -> Check {
         switch source {
         case .unpacking: return Check(name: engineName, ok: false, detail: "unpacking…")
+        case .updating: return Check(name: engineName, ok: false, detail: "updating…")
         case .failed(let msg): return Check(name: engineName, ok: false, detail: msg, fix: .chooseEngine)
         case .bundled, .custom: break
         }

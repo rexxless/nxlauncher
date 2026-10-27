@@ -294,17 +294,17 @@ private func script(_ dir: URL, _ name: String, _ body: String) throws -> URL {
     @Test func unpacksOncePerVersion() async throws {
         let dir = try tempDir(), folder = dir.appending(path: "nxnative")
         let v1 = try await tarball(dir, "one")
-        try await Engine.unpack(tarball: v1, version: "aaaa", to: folder)
+        try await Engine.unpack(tarball: v1, version: .init(sha: "aaaa", date: nil), to: folder)
         #expect(Engine.installedVersion(at: folder) == "aaaa")
         let file = folder.appending(path: "scripts/build_ipa_from_nsp.py")
         #expect(try String(contentsOf: file, encoding: .utf8) == "one")
 
         try "built".write(to: folder.appending(path: "gen.txt"), atomically: true, encoding: .utf8)
-        try await Engine.unpack(tarball: v1, version: "aaaa", to: folder)   // same version: left alone
+        try await Engine.unpack(tarball: v1, version: .init(sha: "aaaa", date: nil), to: folder)   // same version: left alone
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "gen.txt").path))
 
         let v2 = try await tarball(dir, "two")
-        try await Engine.unpack(tarball: v2, version: "bbbb", to: folder)
+        try await Engine.unpack(tarball: v2, version: .init(sha: "bbbb", date: nil), to: folder)
         #expect(try String(contentsOf: file, encoding: .utf8) == "two")
         #expect(Engine.installedVersion(at: folder) == "bbbb")
         #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "gen.txt").path))
@@ -312,12 +312,72 @@ private func script(_ dir: URL, _ name: String, _ body: String) throws -> URL {
 
     @Test func aBadTarballKeepsTheOldEngine() async throws {
         let dir = try tempDir(), folder = dir.appending(path: "nxnative")
-        try await Engine.unpack(tarball: try await tarball(dir, "one"), version: "aaaa", to: folder)
+        try await Engine.unpack(tarball: try await tarball(dir, "one"), version: .init(sha: "aaaa", date: nil), to: folder)
         let bad = dir.appending(path: "bad.tar.gz")
         try "not a tarball".write(to: bad, atomically: true, encoding: .utf8)
-        await #expect(throws: Engine.UnpackError.self) { try await Engine.unpack(tarball: bad, version: "cccc", to: folder) }
+        await #expect(throws: Engine.UnpackError.self) { try await Engine.unpack(tarball: bad, version: .init(sha: "cccc", date: nil), to: folder) }
         #expect(Engine.installedVersion(at: folder) == "aaaa")
         #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "nxnative.partial").path))
+    }
+}
+
+@Suite struct EngineVersionTests {
+    private func date(_ s: String) -> Date { try! Date(s, strategy: .iso8601) }
+
+    @Test func unpacksAGitHubTarballAndStampsTheDate() async throws {
+        let dir = try tempDir(), folder = dir.appending(path: "nxnative")
+        let src = dir.appending(path: "src/seedds-nxnative-abc")
+        try FileManager.default.createDirectory(at: src.appending(path: "scripts"), withIntermediateDirectories: true)
+        try "gh".write(to: src.appending(path: "scripts/build_ipa_from_nsp.py"), atomically: true, encoding: .utf8)
+        let tar = dir.appending(path: "gh.tar.gz")
+        #expect(await ProcessLines.run(URL(fileURLWithPath: "/usr/bin/tar"), ["-czf", tar.path, "-C", dir.appending(path: "src").path, "seedds-nxnative-abc"]) { _ in } == 0)
+        let v = Engine.Version(sha: "abc", date: date("2026-10-20T12:00:00Z"))
+        try await Engine.unpack(tarball: tar, version: v, stripComponents: 1, to: folder)
+        #expect(try String(contentsOf: folder.appending(path: "scripts/build_ipa_from_nsp.py"), encoding: .utf8) == "gh")
+        #expect(Engine.installed(at: folder) == v)
+    }
+
+    @Test func readsStamps() {
+        #expect(Engine.Version(stamp: "abc\n") == Engine.Version(sha: "abc", date: nil))   // a 1.0.0 stamp
+        #expect(Engine.Version(stamp: "abc\n2026-10-20T15:00:00+03:00\n")?.date == date("2026-10-20T12:00:00Z"))
+        #expect(Engine.Version(stamp: "  \n") == nil)
+    }
+
+    @Test func bundledReplacesOnlyOlderEngines() {
+        let old = Engine.Version(sha: "old", date: date("2026-10-01T00:00:00Z"))
+        let new = Engine.Version(sha: "new", date: date("2026-10-20T00:00:00Z"))
+        #expect(Engine.shouldInstallBundled(installed: nil, bundled: old))
+        #expect(!Engine.shouldInstallBundled(installed: old, bundled: old))
+        #expect(Engine.shouldInstallBundled(installed: old, bundled: new))          // a launcher update
+        #expect(!Engine.shouldInstallBundled(installed: new, bundled: old))         // downloaded since: kept
+        #expect(Engine.shouldInstallBundled(installed: .init(sha: "x", date: nil), bundled: old))
+    }
+}
+
+@Suite struct EngineUpdateTests {
+    @Test func parsesTheHeadCommit() throws {
+        let json = #"{"sha":"def456","commit":{"committer":{"date":"2026-10-25T08:30:00Z"},"message":"Port a game\n\nDetails"}}"#
+        let r = try EngineUpdate.parseCommit(Data(json.utf8))
+        #expect(r.version.sha == "def456")
+        #expect(r.message == "Port a game")
+        #expect(r.version.date == (try Date("2026-10-25T08:30:00Z", strategy: .iso8601)))
+        #expect(throws: EngineUpdate.UpdateError.self) { try EngineUpdate.parseCommit(Data("{}".utf8)) }
+    }
+
+    @Test func comparesWithTheInstalledCommit() throws {
+        let c = try EngineUpdate.parseCompare(Data(#"{"status":"ahead","ahead_by":12,"behind_by":0}"#.utf8))
+        #expect(c.status == "ahead" && c.aheadBy == 12)
+        let latest = EngineUpdate.Release(version: .init(sha: "b", date: Date(timeIntervalSince1970: 200)), message: "")
+        let installed = Engine.Version(sha: "a", date: Date(timeIntervalSince1970: 100))
+        #expect(EngineUpdate.status(latest: latest, installed: installed, compare: ("ahead", 12)).isNewer)
+        #expect(!EngineUpdate.status(latest: latest, installed: installed, compare: ("behind", 0)).isNewer)
+        #expect(EngineUpdate.status(latest: latest, installed: installed, compare: nil).isNewer)       // dates decide
+        #expect(!EngineUpdate.status(latest: latest, installed: .init(sha: "a", date: Date(timeIntervalSince1970: 300)), compare: nil).isNewer)
+    }
+
+    @Test func rateLimitIsExplained() {
+        let r = HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 403, httpVersion: nil, headerFields: nil)!
+        #expect(throws: EngineUpdate.UpdateError(message: "GitHub's rate limit was reached, try again later")) { try EngineUpdate.checkResponse(r) }
     }
 }
 

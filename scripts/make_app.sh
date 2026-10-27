@@ -41,7 +41,8 @@ iconutil -c icns "$TMP/AppIcon.iconset" -o "$APP.partial/Contents/Resources/AppI
 
 # nxnative, as committed in the submodule: the launcher unpacks it on first launch (Engine.swift).
 git -C vendor/nxnative archive --format=tar HEAD | gzip -9 > "$APP.partial/Contents/Resources/nxnative.tar.gz"
-git -C vendor/nxnative rev-parse HEAD > "$APP.partial/Contents/Resources/nxnative.version"
+# Its commit and commit date: a newer engine downloaded later is kept over an older copy in the app.
+git -C vendor/nxnative log -1 --format='%H%n%cI' > "$APP.partial/Contents/Resources/nxnative.version"
 
 cat > "$APP.partial/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

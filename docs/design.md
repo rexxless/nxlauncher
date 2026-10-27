@@ -11,7 +11,7 @@ nxnative builds each Switch game into a self-contained Mac app: `scripts/build_i
 Decisions (from the user):
 - Native **SwiftUI for macOS 26**, using the real Liquid Glass APIs.
 - **Mac apps only**: no IPA builds in the launcher.
-- **Game icon only** for artwork: no network access.
+- **Game icon only** for artwork: no network access. (Since 1.1.0 the one exception is nxnative updates: `EngineUpdate` asks api.github.com for the head of seedds/nxnative main and downloads its tarball from codeload.github.com.)
 - A **new local repo plus a private GitHub repo** (`gh repo create --private`).
 - The repo will be made public later, so it must hold **no secrets or personal data**: no key paths, no user names or emails, no home-folder paths, and no game files or game art in the repo or its tests.
 

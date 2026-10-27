@@ -10,6 +10,16 @@ enum Route: Hashable {
 /// A Settings row to scroll to and highlight, when a fix button elsewhere sends the user there.
 enum SettingsFocus: Hashable { case engine, keys }
 
+/// Where the engine update stands, for Settings.
+enum EngineUpdateState: Equatable {
+    case idle
+    case checking
+    case upToDate(checked: Date)
+    case available(EngineUpdate.Status)
+    case updating
+    case failed(String)
+}
+
 /// One build in the queue: its request, its folded progress and its log.
 @MainActor @Observable
 final class BuildJob: Identifiable {
@@ -44,6 +54,12 @@ final class AppModel {
     var keysPath: String { didSet { defaults.set(keysPath, forKey: "keysPath") } }
     var pythonPath: String { didSet { defaults.set(pythonPath, forKey: "pythonPath") } }
     var appearance: Appearance { didSet { defaults.set(try? JSONEncoder().encode(appearance), forKey: "appearance") } }
+    var autoUpdateEngine: Bool {
+        didSet {
+            defaults.set(autoUpdateEngine, forKey: "autoUpdateEngine")
+            if autoUpdateEngine { Task { await checkForEngineUpdate(auto: true) } }
+        }
+    }
 
     var route: Route = .home
     var detail: GameBundle?
@@ -61,6 +77,11 @@ final class AppModel {
     private(set) var sizes: [String: Int64] = [:]
     var preflight: [Preflight.Check] = []
     private(set) var engineSource: Preflight.EngineSource = .custom
+    /// The managed engine's commit, from its stamp.
+    private(set) var installedEngine: Engine.Version?
+    private(set) var engineUpdate: EngineUpdateState = .idle
+    /// An update waiting for the build queue to empty: the engine folder is never swapped under a build.
+    private(set) var engineUpdateWaits = false
     /// The checks whose fix is running, and the last line each one wrote (or its error).
     private(set) var fixing: Set<String> = []
     private(set) var fixStatus: [String: String] = [:]
@@ -68,6 +89,7 @@ final class AppModel {
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private let store = Store.default
     @ObservationIgnored private var heartbeat: Timer?
+    @ObservationIgnored private var updateTimer: Timer?
     @ObservationIgnored private var launcher: GameLauncher?
 
     init() {
@@ -75,6 +97,7 @@ final class AppModel {
         keysPath = defaults.string(forKey: "keysPath") ?? ""
         pythonPath = defaults.string(forKey: "pythonPath") ?? Preflight.findPython()?.path ?? ""
         appearance = defaults.data(forKey: "appearance").flatMap { try? JSONDecoder().decode(Appearance.self, from: $0) } ?? Appearance()
+        autoUpdateEngine = defaults.object(forKey: "autoUpdateEngine") as? Bool ?? true
         library = store.load(LibraryState.self, "library.json") ?? LibraryState()
         playtime = store.load(PlaytimeLog.self, "playtime.json") ?? PlaytimeLog()
         playtime.closeStale()
@@ -87,6 +110,9 @@ final class AppModel {
         launcher?.adoptRunning()
         heartbeat = Timer.scheduledTimer(withTimeInterval: PlaytimeLog.heartbeat, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.beat() }
+        }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: Self.updateInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { guard let self, self.autoUpdateEngine else { return }; Task { await self.checkForEngineUpdate(auto: true) } }
         }
         Task { await runPreflight() }
     }
@@ -101,30 +127,105 @@ final class AppModel {
         return nil
     }
 
-    /// Unpacks the shipped nxnative when this version is not unpacked yet. A build without the tarball (swift run) has no bundled engine.
-    func prepareEngine() {
-        guard usesBundledEngine else { engineSource = .custom; return }
+    /// Unpacks the shipped nxnative when nothing newer is unpacked: a first launch, or a launcher update that ships a newer commit.
+    /// An engine updated from GitHub since is kept. `force` puts the app's own copy back. A build without the tarball (swift run)
+    /// has no bundled engine, but an engine already unpacked or updated is still used.
+    func prepareEngine(force: Bool = false) {
+        guard usesBundledEngine else { engineSource = .custom; installedEngine = nil; return }
+        let installed = Engine.installed(at: Engine.defaultFolder)
         guard let (tarball, version) = Engine.bundled() else {
-            engineSource = .failed("this build of the launcher has no nxnative inside: choose a clone"); return
+            if let installed { settle(installed) } else {
+                engineSource = .failed("this build of the launcher has no nxnative inside: choose a clone")
+            }
+            return
         }
-        if Engine.installedVersion(at: Engine.defaultFolder) == version { engineSource = .bundled(version: version); reloadCatalog(); return }
+        if !force && !Engine.shouldInstallBundled(installed: installed, bundled: version), let installed { settle(installed); return }
+        if force { try? FileManager.default.removeItem(at: Engine.defaultFolder.appending(path: Engine.stampName)) }
         engineSource = .unpacking
         Task {
             do {
                 try await Engine.unpack(tarball: tarball, version: version, to: Engine.defaultFolder)
-                engineSource = .bundled(version: version)
+                settle(version)
             } catch {
                 engineSource = .failed(error.localizedDescription)
+                reloadCatalog()
             }
-            reloadCatalog()
             await runPreflight()
         }
     }
 
+    /// The managed engine is ready at this version. A check for updates follows when it is due.
+    private func settle(_ version: Engine.Version) {
+        engineSource = .bundled(version: version.sha)
+        installedEngine = version
+        reloadCatalog()
+        if autoUpdateEngine, Date().timeIntervalSince(lastEngineCheck ?? .distantPast) > Self.updateInterval {
+            Task { await checkForEngineUpdate(auto: true) }
+        }
+    }
+
     func useBundledEngine() {
+        let wasCustom = !usesBundledEngine
         checkoutPath = ""
-        prepareEngine()
+        engineUpdate = .idle
+        prepareEngine(force: !wasCustom)
         Task { await runPreflight() }
+    }
+
+    /// Whether the managed engine is the app's own copy, not one updated from GitHub.
+    var engineIsBundledCopy: Bool { installedEngine != nil && installedEngine?.sha == Engine.bundled()?.version.sha }
+
+    // MARK: Engine updates
+
+    static let updateInterval: TimeInterval = 6 * 60 * 60
+
+    private var lastEngineCheck: Date? {
+        get { defaults.object(forKey: "lastEngineCheck") as? Date }
+        set { defaults.set(newValue, forKey: "lastEngineCheck") }
+    }
+
+    /// Asks GitHub whether nxnative's main branch has moved past the installed commit. With `auto`, an update found is installed.
+    func checkForEngineUpdate(auto: Bool = false) async {
+        guard usesBundledEngine, let installed = installedEngine else { return }
+        switch engineUpdate { case .checking, .updating: return; default: break }
+        if auto, case .failed = engineSource { return }
+        engineUpdate = .checking
+        do {
+            let status = try await EngineUpdate.check(installed: installed)
+            lastEngineCheck = Date()
+            guard usesBundledEngine, installedEngine == installed else { engineUpdate = .idle; return }
+            engineUpdate = status.isNewer ? .available(status) : .upToDate(checked: Date())
+            if status.isNewer && auto { await updateEngine() }
+        } catch {
+            // A quiet check that fails (offline, say) is only noted; the next one runs on schedule.
+            engineUpdate = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Downloads and unpacks the newer engine found by the last check. While a build is queued or running it waits for the queue.
+    func updateEngine() async {
+        guard usesBundledEngine, case .available(let status) = engineUpdate else { return }
+        if activeCount > 0 { engineUpdateWaits = true; return }
+        engineUpdateWaits = false
+        let previous = engineSource
+        engineUpdate = .updating
+        engineSource = .updating
+        await runPreflight()
+        let release = status.latest
+        do {
+            let tarball = try await EngineUpdate.download(release, to: store.folder.appending(path: "Downloads"))
+            defer { try? FileManager.default.removeItem(at: tarball) }
+            try await Engine.unpack(tarball: tarball, version: release.version, stripComponents: 1, to: Engine.defaultFolder)
+            engineSource = .bundled(version: release.version.sha)
+            installedEngine = release.version
+            reloadCatalog()
+            engineUpdate = .upToDate(checked: Date())
+            Notifier.post(title: "nxnative updated", body: "Now at \(Engine.shortVersion(release.version.sha)): \(release.message)")
+        } catch {
+            engineSource = previous
+            engineUpdate = .failed("could not update: \(error.localizedDescription)")
+        }
+        await runPreflight()
     }
 
     func reloadCatalog() {
@@ -370,6 +471,7 @@ final class AppModel {
         job.runner = nil
         updateDock()
         startNextBuild()
+        if engineUpdateWaits && activeCount == 0 { Task { await updateEngine() } }
     }
 
     /// No path in the script's output: the newest nxnative app in the NSP folder (or beside -o) changed since the build started.
@@ -388,7 +490,10 @@ final class AppModel {
 
     func cancel(_ job: BuildJob) {
         if let runner = job.runner { runner.cancel() }
-        else if job.isActive { job.outcome = .cancelled; job.progress.phase = .cancelled }
+        else if job.isActive {
+            job.outcome = .cancelled; job.progress.phase = .cancelled
+            if engineUpdateWaits && activeCount == 0 { Task { await updateEngine() } }
+        }
     }
 
     func clearFinishedBuilds() { builds.removeAll { !$0.isActive } }

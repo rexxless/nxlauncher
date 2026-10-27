@@ -13,8 +13,11 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 Text("Settings").font(.system(size: 34, weight: .heavy, design: .rounded))
 
-                card("Engine", focus: .engine, footer: "nxnative ships inside the launcher and is unpacked once per version. To build with your own clone instead, choose its folder.") {
+                card("Engine", focus: .engine, footer: model.usesBundledEngine
+                     ? "nxnative ships inside the launcher. Updates come from its main branch on GitHub; a newer launcher's own copy replaces an older one. To build with your own clone instead, choose its folder."
+                     : "Your own clone is used as it is: update it with git.") {
                     EngineRow()
+                    if model.usesBundledEngine { EngineUpdateRows() }
                     PathRow(label: "Python 3", path: $model.pythonPath, directory: false)
                 }
                 card("Keys", focus: .keys, footer: "Only the file's location is stored, on this Mac. The launcher passes it to nxnative and never opens or shows the file.") {
@@ -244,6 +247,7 @@ struct EngineRow: View {
                     switch model.engineSource {
                     case .bundled(let v): Label("Bundled · \(Engine.shortVersion(v))", systemImage: "shippingbox.fill")
                     case .unpacking: Label("Unpacking…", systemImage: "shippingbox")
+                    case .updating: Label("Updating…", systemImage: "arrow.down.circle")
                     case .failed(let msg): Text(msg).foregroundStyle(.yellow)
                     case .custom: Text("Not set").foregroundStyle(.white.opacity(0.5))
                     }
@@ -252,6 +256,77 @@ struct EngineRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             if !model.usesBundledEngine { Button("Use Bundled") { model.useBundledEngine() }.launcherButton() }
             Button("Choose Clone…") { model.choose(.engine) }.launcherButton()
+        }
+    }
+}
+
+/// The managed engine's commit, the update check with its Update button, and the auto-update switch.
+struct EngineUpdateRows: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        if let v = model.installedEngine {
+            HStack {
+                Text("Version").frame(width: 150, alignment: .leading)
+                Text(Engine.shortVersion(v.sha)).monospaced()
+                if let d = v.date { Text("· \(d.formatted(date: .abbreviated, time: .omitted))").foregroundStyle(.white.opacity(0.75)) }
+                Text(model.engineIsBundledCopy ? "bundled" : "updated")
+                    .font(.caption.weight(.semibold)).padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(.white.opacity(0.15), in: Capsule())
+                Spacer()
+            }
+            HStack(spacing: 10) {
+                Text("Updates").frame(width: 150, alignment: .leading)
+                status.frame(maxWidth: .infinity, alignment: .leading)
+                actions
+            }
+        }
+        HStack {
+            Text("Auto-update").frame(width: 150, alignment: .leading)
+            Toggle("Update nxnative automatically", isOn: $model.autoUpdateEngine)
+            Spacer()
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        switch model.engineUpdate {
+        case .idle: Text("Not checked yet").foregroundStyle(.white.opacity(0.6))
+        case .checking: HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Checking…") }
+        case .upToDate(let checked):
+            Label("Up to date · checked \(checked.formatted(.relative(presentation: .named)))", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.white.opacity(0.85))
+        case .available(let s):
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.green)
+                    Text(Engine.shortVersion(s.latest.version.sha)).monospaced().fontWeight(.semibold)
+                    if let n = s.aheadBy { Text("· \(n) commit\(n == 1 ? "" : "s") newer") }
+                    if let old = model.installedEngine {
+                        Link("What's New", destination: EngineUpdate.compareURL(from: old.sha, to: s.latest.version.sha)).fontWeight(.semibold)
+                    }
+                }
+                Text(model.engineUpdateWaits ? "Updates when the builds finish" : s.latest.message)
+                    .font(.caption).foregroundStyle(.white.opacity(0.65)).lineLimit(1).truncationMode(.tail)
+            }
+        case .updating: HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Downloading and unpacking…") }
+        case .failed(let msg): Text(msg).foregroundStyle(.yellow).lineLimit(2)
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        switch model.engineUpdate {
+        case .available:
+            Button { Task { await model.updateEngine() } } label: { Label("Update", systemImage: "arrow.down.circle") }
+                .launcherButton(prominent: true).disabled(model.engineUpdateWaits)
+        case .checking, .updating: EmptyView()
+        case .failed: Button("Try Again") { Task { await model.checkForEngineUpdate() } }.launcherButton()
+        case .idle, .upToDate: Button("Check Now") { Task { await model.checkForEngineUpdate() } }.launcherButton()
+        }
+        if !model.engineIsBundledCopy, model.installedEngine != nil, Engine.bundled() != nil {
+            Button("Use Bundled") { model.useBundledEngine() }.launcherButton()
+                .help("Go back to the nxnative copy inside the launcher")
+                .disabled(model.engineUpdate == .updating || model.activeCount > 0)
         }
     }
 }

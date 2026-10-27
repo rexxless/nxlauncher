@@ -83,7 +83,7 @@ Games you built before the launcher can be added in Settings. Add the folder tha
 - **Library**: Home, All Games, Recently Played, Favorites (right-click a game to add it) and a list per graphics API, in the sidebar. Search with ⌘F.
 - **A game's page** shows its playtime chart, its details and **Play**.
 - **Builds** run one at a time: each one uses every core and a lot of memory. Cancelling a build interrupts nxnative as Ctrl-C would, so it stops cleanly.
-- **Settings** (⌘,): library folders, the keys file, the Python and nxnative in use, and **Appearance**: Liquid Glass or solid buttons, the button color and opacity, the window color when no game is chosen, and how strongly the window is tinted.
+- **Settings** (⌘,): library folders, the keys file, the Python and nxnative in use with its version and updates (below), and **Appearance**: Liquid Glass or solid buttons, the button color and opacity, the window color when no game is chosen, and how strongly the window is tinted.
 
 | Shortcut | Does |
 |---|---|
@@ -96,7 +96,17 @@ Games you built before the launcher can be added in Settings. Add the folder tha
 
 ### Update
 
-Install the new version the same way, over the old one: drag it onto Applications and choose **Replace**, or rebuild with `git pull --recurse-submodules && scripts/make_app.sh`. The library, playtime and settings live outside the app and carry over. A new launcher brings its own nxnative and unpacks it on its first launch.
+Install the new version the same way, over the old one: drag it onto Applications and choose **Replace**, or rebuild with `git pull --recurse-submodules && scripts/make_app.sh`. The library, playtime and settings live outside the app and carry over. A new launcher brings its own nxnative and unpacks it on its first launch, unless the engine was already updated past it.
+
+#### nxnative updates
+
+nxnative gains games and fixes far more often than the launcher is released, so the launcher can update it on its own. Settings → **Engine** shows:
+
+- **Version**: the nxnative commit in use and its date, marked *bundled* (the app's own copy) or *updated* (downloaded since).
+- **Updates**: **Check Now** asks GitHub whether nxnative's `main` branch has newer commits. If so, the row shows how many, the latest commit's message and a **What's New** link, and **Update** downloads and installs it. **Use Bundled** goes back to the app's own copy.
+- **Auto-update** (on by default): checks at launch and every six hours, and installs what it finds. A notification says when nxnative was updated.
+
+An update never replaces the engine under a running build: it waits until the builds are finished. After an update, **Ready to Build** checks again, in case the new nxnative needs another Python module. Your own clone (**Choose Clone…**) is never touched: update it with git. This is the only time the launcher goes online, to `api.github.com` and `codeload.github.com`.
 
 ### Uninstall
 
@@ -107,7 +117,7 @@ Delete `/Applications/NxLauncher.app`, then, to remove everything else, `~/Libra
 | What | Where |
 |---|---|
 | Library and playtime | `~/Library/Application Support/NxLauncher/` (`library.json`, `playtime.json`) |
-| The shipped nxnative, unpacked | `~/Library/Application Support/NxLauncher/nxnative` (replaced when the launcher brings a new version) |
+| The shipped nxnative, unpacked | `~/Library/Application Support/NxLauncher/nxnative` (replaced by an update, or when the launcher brings a newer version; its commit is in `.nxl-version`) |
 | The private Python | `~/Library/Application Support/NxLauncher/python` |
 | Settings (paths and appearance) | the app's user defaults (`org.nxnative-launcher.app`) |
 | Built games | the NSP folder, as nxnative writes them (`<game name>.app`) |
@@ -123,7 +133,7 @@ Delete `/Applications/NxLauncher.app`, then, to remove everything else, `~/Libra
   - `PlaytimeLog`: sessions and totals.
   - `Palette`: the colors taken from an icon. `Appearance`: the user's buttons and window color.
   - `Preflight`: the checks before a build, and what fixes each one.
-  - `Engine`: unpacking the shipped nxnative. `PythonSetup`: the private Python.
+  - `Engine`: unpacking the shipped nxnative. `EngineUpdate`: newer nxnative from GitHub. `PythonSetup`: the private Python.
 - `Sources/NxLauncher`: the SwiftUI app.
 - `vendor/nxnative`: nxnative, as a submodule. `make_app.sh` packs it into the app as `nxnative.tar.gz`.
 - `scripts/make_app.sh`: builds the app bundle. `scripts/make_dmg.sh`: packs it into a disk image. `scripts/make_icon.swift` draws the launcher's icon.

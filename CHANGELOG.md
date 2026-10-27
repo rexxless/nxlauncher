@@ -2,6 +2,18 @@
 
 All notable changes to nxnative Launcher. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-27
+
+### Added
+
+- **nxnative updates**: Settings → Engine shows the nxnative commit in use and its date, and checks GitHub for newer commits on nxnative's main branch: how many, the latest one's message and a link to what changed. **Update** downloads and installs it, and **Use Bundled** goes back to the copy inside the launcher.
+- **Auto-update engine** (on by default): checks at launch and every six hours and installs a newer nxnative on its own, then posts a notification. An update waits for running builds to finish, and Ready to Build checks again afterwards.
+
+### Changed
+
+- An updated nxnative is kept across launches. A newer launcher replaces it only when its own copy is newer.
+- The launcher now goes online, only to GitHub and only for nxnative updates. Turn **Auto-update** off to keep it offline until you press **Check Now**.
+
 ## [1.0.0] - 2026-10-27
 
 The first release.
@@ -26,4 +38,5 @@ The first release.
 - Apple silicon and macOS 26 or later only.
 - The app is not notarized by Apple. The first launch needs **Open Anyway** in System Settings → Privacy & Security (see the README).
 
+[1.1.0]: https://github.com/rexxless/nxlauncher/releases/tag/v1.1.0
 [1.0.0]: https://github.com/rexxless/nxlauncher/releases/tag/v1.0.0
