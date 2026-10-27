@@ -30,7 +30,7 @@ struct GameDetailView: View {
                                         Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).frame(width: 46, height: 46)
                                     }
                                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-                                    .glassEffect(.regular.interactive(), in: .circle)
+                                    .roundButton()
                                 }
                             }
                         }

@@ -97,7 +97,7 @@ struct StatsRow: View {
             StatCell(label: "Most played", value: mostPlayed ?? "—")
         }
         .frame(height: 76)
-        .glassEffect(.regular.tint(model.theme.deep.color.opacity(0.3)), in: .rect(cornerRadius: 18))
+        .glassEffect(.regular.tint(model.surface(model.theme.deep, 0.3)), in: .rect(cornerRadius: 18))
     }
 
     private var mostPlayed: String? {
@@ -157,11 +157,10 @@ struct Onboarding: View {
                 .font(.title3).foregroundStyle(.white.opacity(0.8)).frame(maxWidth: 560, alignment: .leading)
             HStack(spacing: 12) {
                 Button { model.showingAddGame = true } label: {
-                    Label("Add Game", systemImage: "plus").font(.title3.weight(.semibold)).frame(width: 150, height: 46)
-                        .foregroundStyle(.black).background(.white, in: .capsule)
+                    Label("Add Game", systemImage: "plus").font(.title3.weight(.semibold))
                 }
-                .buttonStyle(.plain)
-                Button("Settings") { model.route = .settings }.buttonStyle(.glass).controlSize(.extraLarge)
+                .launcherButton(prominent: true).controlSize(.extraLarge)
+                Button("Settings") { model.route = .settings }.launcherButton().controlSize(.extraLarge)
             }
             if !model.readyToBuild && !model.preflight.isEmpty {
                 PreflightList().frame(maxWidth: 560)

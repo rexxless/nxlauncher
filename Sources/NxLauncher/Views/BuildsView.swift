@@ -12,7 +12,7 @@ struct BuildsView: View {
                     Text("Builds").font(.system(size: 34, weight: .heavy, design: .rounded))
                     Spacer()
                     if model.builds.contains(where: { !$0.isActive }) {
-                        Button("Clear Finished") { model.clearFinishedBuilds() }.buttonStyle(.glass)
+                        Button("Clear Finished") { model.clearFinishedBuilds() }.launcherButton()
                     }
                 }
                 if model.builds.isEmpty {
@@ -21,7 +21,7 @@ struct BuildsView: View {
                         Text("Add a game's NSP folder and nxnative extracts it, rewrites its code for the Mac, translates its shaders and packs it into an app. A first build takes a few minutes; later ones reuse what they can.")
                             .foregroundStyle(.white.opacity(0.75)).frame(maxWidth: 560, alignment: .leading)
                         Button { model.showingAddGame = true } label: { Label("Add Game", systemImage: "plus") }
-                            .buttonStyle(.glassProminent).tint(model.theme.accent.color).controlSize(.large)
+                            .launcherButton(prominent: true).controlSize(.large)
                     }
                     .padding(.top, 20)
                 }
@@ -111,7 +111,7 @@ struct BuildCard: View {
             } label: { Text("Log (\(job.log.count) line\(job.log.count == 1 ? "" : "s"))").font(.callout.weight(.semibold)) }
         }
         .padding(20)
-        .glassEffect(.regular.tint(model.theme.deep.color.opacity(0.25)), in: .rect(cornerRadius: 22))
+        .glassEffect(.regular.tint(model.surface(model.theme.deep, 0.25)), in: .rect(cornerRadius: 22))
     }
 
     @ViewBuilder private var art: some View {
@@ -129,15 +129,15 @@ struct BuildCard: View {
 
     @ViewBuilder private var actions: some View {
         if job.isActive {
-            Button("Cancel", role: .cancel) { model.cancel(job) }.buttonStyle(.glass)
+            Button("Cancel", role: .cancel) { model.cancel(job) }.launcherButton()
         } else if let g = job.app {
             HStack {
-                Button("Show") { model.detail = g }.buttonStyle(.glass)
+                Button("Show") { model.detail = g }.launcherButton()
                 Button { model.play(g) } label: { Label("Play", systemImage: "play.fill") }
-                    .buttonStyle(.glassProminent).tint(model.theme.accent.color)
+                    .launcherButton(prominent: true)
             }
         } else {
-            Button("Show Folder") { NSWorkspace.shared.open(job.request.nspFolder) }.buttonStyle(.glass)
+            Button("Show Folder") { NSWorkspace.shared.open(job.request.nspFolder) }.launcherButton()
         }
     }
 

@@ -67,19 +67,19 @@ struct AddGameSheet: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Before building").font(.headline)
                     PreflightList()
-                    Button("Open Settings") { model.route = .settings; dismiss() }.buttonStyle(.glass)
+                    Button("Open Settings") { model.route = .settings; dismiss() }.launcherButton()
                 }
             }
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(.glass)
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).launcherButton()
                 Button("Build") {
                     if let folder { model.enqueueBuild(nspFolder: folder, language: language.isEmpty ? nil : language) }
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.glassProminent).tint(model.theme.accent.color)
+                .launcherButton(prominent: true)
                 .disabled(folder == nil || !model.readyToBuild)
             }
         }

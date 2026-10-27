@@ -34,7 +34,7 @@ public struct RGB: Equatable, Hashable, Sendable, Codable {
         }
     }
 
-    func distance(_ o: RGB) -> Double { (r - o.r) * (r - o.r) + (g - o.g) * (g - o.g) + (b - o.b) * (b - o.b) }
+    public func distance(_ o: RGB) -> Double { (r - o.r) * (r - o.r) + (g - o.g) * (g - o.g) + (b - o.b) * (b - o.b) }
 }
 
 /// The colors the window takes from a game's icon: `base` fills the window, `deep` the sidebar and lower half, `accent` the charts and highlights.
@@ -50,6 +50,20 @@ public struct Palette: Equatable, Hashable, Sendable, Codable {
 
     /// Text and the Play button go dark on a light base.
     public var isLight: Bool { base.luminance > 0.6 }
+
+    /// The filled buttons' color: the accent's hue, saturated, and dark enough at any hue for white text on it.
+    public var button: RGB {
+        let a = accent.hsb, s = min(0.8, max(a.s, 0.6))
+        return RGB(h: a.h, s: s, v: min(0.8, 0.4 / RGB(h: a.h, s: s, v: 1).luminance))
+    }
+
+    /// A palette around one chosen color, kept as it is for the base: the window's color when no game is chosen.
+    public static func solid(_ main: RGB) -> Palette {
+        let h = main.hsb
+        let deep = RGB(h: h.h, s: h.s, v: h.v * 0.55)
+        let accent = RGB(h: (h.h + 0.08).truncatingRemainder(dividingBy: 1), s: 0.6, v: 1)
+        return Palette(base: main, deep: deep, accent: accent, swatches: [main, deep, accent, main])
+    }
 
     public static func from(imageAt url: URL) -> Palette? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),

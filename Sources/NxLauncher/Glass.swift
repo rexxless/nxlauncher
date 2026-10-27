@@ -121,7 +121,7 @@ struct CoverCard: View {
                         Image(systemName: "play.fill").font(.title2).frame(width: 54, height: 54)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .circle)
+                    .roundButton(fill: .black.opacity(0.4))
                     .transition(.scale.combined(with: .opacity))
                 }
             }
@@ -202,7 +202,7 @@ struct PlayButton: View {
     }
 }
 
-/// A round glass toolbar button.
+/// A round toolbar button, glass or solid as the buttons are.
 struct GlassCircleButton: View {
     let systemImage: String
     var size: CGFloat = 46
@@ -214,7 +214,68 @@ struct GlassCircleButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
-        .glassEffect(.regular.interactive(), in: .circle)
+        .roundButton()
+    }
+}
+
+extension View {
+    /// The launcher's buttons, Liquid Glass or solid as chosen in Settings; a prominent one wears the button color.
+    func launcherButton(prominent: Bool = false) -> some View { modifier(LauncherButton(prominent: prominent)) }
+
+    /// A round button's backing: interactive glass, or a flat circle of `fill`.
+    func roundButton(fill: Color = .white.opacity(0.14)) -> some View { modifier(RoundButton(fill: fill)) }
+}
+
+struct LauncherButton: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let prominent: Bool
+
+    func body(content: Content) -> some View {
+        switch model.appearance.buttonLook {
+        case .glass:
+            if prominent { content.buttonStyle(.glassProminent).tint(model.buttonTint).foregroundStyle(model.buttonInk) }
+            else { content.buttonStyle(.glass) }
+        case .solid:
+            content.buttonStyle(SolidButtonStyle(fill: prominent ? model.buttonTint : .white.opacity(0.14), ink: prominent ? model.buttonInk : .white))
+        }
+    }
+}
+
+struct RoundButton: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let fill: Color
+
+    func body(content: Content) -> some View {
+        if model.appearance.buttonLook == .glass {
+            content.glassEffect(.regular.interactive(), in: .circle)
+        } else {
+            content.background(fill, in: .circle).overlay(Circle().strokeBorder(.white.opacity(0.12)))
+        }
+    }
+}
+
+/// A plain capsule button, padded per control size as the glass buttons are.
+struct SolidButtonStyle: ButtonStyle {
+    let fill: Color
+    let ink: Color
+    @Environment(\.controlSize) private var size
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let (h, v): (CGFloat, CGFloat) = switch size {
+        case .mini: (8, 2)
+        case .small: (10, 3)
+        case .large: (16, 7)
+        case .extraLarge: (20, 10)
+        default: (12, 5)
+        }
+        configuration.label
+            .padding(.horizontal, h).padding(.vertical, v)
+            .foregroundStyle(ink)
+            .background(fill, in: .capsule)
+            .overlay(Capsule().strokeBorder(.white.opacity(0.12)))
+            .contentShape(.capsule)
+            .opacity(!enabled ? 0.45 : configuration.isPressed ? 0.7 : 1)
     }
 }
 

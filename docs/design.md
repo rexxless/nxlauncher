@@ -33,7 +33,7 @@ What nxnative already provides (no engine changes are needed):
 
 ## Repository
 
-The new repo goes in a sibling folder, `~/projects/nxnative-launcher` (outside the nxnative checkout):
+The new repo goes in a sibling folder, `~/projects/nxlauncher` (outside the nxnative checkout):
 
 ```
 Package.swift               LauncherCore library, the NxLauncher app target and tests; builds with the Command Line Tools alone

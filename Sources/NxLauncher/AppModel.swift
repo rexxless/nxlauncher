@@ -38,11 +38,12 @@ final class BuildJob: Identifiable {
 
 @MainActor @Observable
 final class AppModel {
-    // Settings: paths only, kept in UserDefaults (never in the repository; the keys file is never read by the launcher).
+    // Settings: paths and the appearance, kept in UserDefaults (never in the repository; the keys file is never read by the launcher).
     // An empty checkoutPath means the nxnative shipped in the app.
     var checkoutPath: String { didSet { defaults.set(checkoutPath, forKey: "checkoutPath"); reloadCatalog() } }
     var keysPath: String { didSet { defaults.set(keysPath, forKey: "keysPath") } }
     var pythonPath: String { didSet { defaults.set(pythonPath, forKey: "pythonPath") } }
+    var appearance: Appearance { didSet { defaults.set(try? JSONEncoder().encode(appearance), forKey: "appearance") } }
 
     var route: Route = .home
     var detail: GameBundle?
@@ -73,6 +74,7 @@ final class AppModel {
         checkoutPath = defaults.string(forKey: "checkoutPath") ?? ""
         keysPath = defaults.string(forKey: "keysPath") ?? ""
         pythonPath = defaults.string(forKey: "pythonPath") ?? Preflight.findPython()?.path ?? ""
+        appearance = defaults.data(forKey: "appearance").flatMap { try? JSONDecoder().decode(Appearance.self, from: $0) } ?? Appearance()
         library = store.load(LibraryState.self, "library.json") ?? LibraryState()
         playtime = store.load(PlaytimeLog.self, "playtime.json") ?? PlaytimeLog()
         playtime.closeStale()
@@ -139,13 +141,14 @@ final class AppModel {
         guard icons[id] == nil else { return }
         if let img = NSImage(contentsOf: icon) { icons[id] = img }
         Task.detached(priority: .utility) {
-            let p = Palette.from(imageAt: icon) ?? .fallback
+            // No palette for an icon without color: such a game wears the default window color.
+            let p = Palette.from(imageAt: icon).flatMap { $0 == .fallback ? nil : $0 }
             let size = BundleSize.of(url)
             await MainActor.run { self.palettes[id] = p; self.sizes[id] = size }
         }
     }
 
-    func palette(_ g: GameBundle?) -> Palette { g.flatMap { palettes[$0.titleID] } ?? .fallback }
+    func palette(_ g: GameBundle?) -> Palette { g.flatMap { palettes[$0.titleID] } ?? appearance.defaultPalette }
 
     var libraryFolders: [URL] { library.folders }
 
@@ -217,6 +220,13 @@ final class AppModel {
 
     /// The colors the window wears: the open game's, else Home's hero.
     var theme: Palette { palette(detail ?? heroGame) }
+
+    /// The filled buttons: the chosen color, else the theme's.
+    var buttonRGB: RGB { appearance.buttonColor ?? theme.button }
+    var buttonTint: Color { buttonRGB.color.opacity(appearance.buttonOpacity) }
+    var buttonInk: Color { appearance.darkInk(on: buttonRGB) ? .black : .white }
+    /// A tinted surface (sidebar, cards, search field), as strong as the user's tint opacity.
+    func surface(_ c: RGB, _ alpha: Double) -> Color { c.color.opacity(appearance.tint(alpha)) }
 
     func metaLine(_ g: GameBundle) -> String {
         var parts: [String] = []

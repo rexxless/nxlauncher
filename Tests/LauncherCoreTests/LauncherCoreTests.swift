@@ -218,6 +218,59 @@ final class Box<T>: @unchecked Sendable {
         #expect(b.hsb.s < 0.7 && b.hsb.v < 0.7)  // muted
         #expect(!Palette.fallback.isLight)
     }
+
+    @Test func buttonIsAVioletUnderWhiteText() {
+        let f = Palette.fallback, b = f.button
+        #expect(b.b > b.r && b.r > b.g)                  // violet
+        #expect(b.hsb.v > f.base.hsb.v + 0.15)           // stands out from the base
+        #expect(b.luminance <= 0.4)
+    }
+}
+
+@Suite struct ButtonColor {
+    @Test(arguments: [0.0, 0.15, 0.33, 0.5, 0.67, 0.85])
+    func staysDarkEnoughForWhiteText(hue: Double) {
+        var p = Palette.fallback
+        p.accent = RGB(h: hue, s: 0.7, v: 1)
+        #expect(p.button.luminance <= 0.4 + 1e-9)
+        #expect(abs(p.button.hsb.h - p.accent.hsb.h) < 0.01)
+    }
+}
+
+@Suite struct AppearanceTests {
+    @Test func solidKeepsTheColor() {
+        let main = RGB(0.2, 0.5, 0.4), p = Palette.solid(main)
+        #expect(p.base == main)
+        #expect(p.deep.luminance < p.base.luminance)
+        #expect(abs(p.deep.hsb.h - main.hsb.h) < 0.01)
+    }
+
+    @Test func defaultsAndRoundTrip() throws {
+        let empty = try JSONDecoder().decode(Appearance.self, from: Data("{}".utf8))
+        #expect(empty == Appearance())
+        #expect(empty.defaultPalette == .fallback)
+        var a = Appearance()
+        a.buttonLook = .solid; a.buttonColor = RGB(1, 0.9, 0.2); a.buttonOpacity = 0.8; a.mainColor = RGB(0.1, 0.4, 0.3); a.tintOpacity = 0.3
+        #expect(try JSONDecoder().decode(Appearance.self, from: JSONEncoder().encode(a)) == a)
+        #expect(a.defaultPalette.base == RGB(0.1, 0.4, 0.3))
+    }
+
+    @Test func tintScalesAndClamps() {
+        var a = Appearance()
+        #expect(a.tint(0.25) == 0.25)
+        a.tintOpacity = 1
+        #expect(a.tint(0.8) == 1)
+        a.tintOpacity = 0
+        #expect(a.tint(0.5) == 0)
+    }
+
+    @Test func darkInkOnlyOnLightOpaqueButtons() {
+        var a = Appearance()
+        #expect(a.darkInk(on: RGB(1, 0.95, 0.6)))
+        #expect(!a.darkInk(on: Palette.fallback.button))
+        a.buttonOpacity = 0.4
+        #expect(!a.darkInk(on: RGB(1, 0.95, 0.6)))
+    }
 }
 
 private func script(_ dir: URL, _ name: String, _ body: String) throws -> URL {

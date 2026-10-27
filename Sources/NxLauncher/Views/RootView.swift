@@ -83,12 +83,11 @@ struct TopBar: View {
                 }
             }
             .padding(.horizontal, 14).frame(width: 300, height: 36)
-            .glassEffect(.regular.tint(model.theme.base.color.opacity(0.25)).interactive(), in: .capsule)
+            .glassEffect(.regular.tint(model.surface(model.theme.base, 0.25)).interactive(), in: .capsule)
             Button { model.showingAddGame = true } label: {
                 Label("Add Game", systemImage: "plus").font(.callout.weight(.semibold)).padding(.horizontal, 6).frame(height: 28)
             }
-            .buttonStyle(.glassProminent)
-            .tint(model.theme.accent.color)
+            .launcherButton(prominent: true)
             .keyboardShortcut("n", modifiers: .command)
             Button("") { searchFocused = true }.keyboardShortcut("f", modifiers: .command).hidden().frame(width: 0)
         }
@@ -132,7 +131,7 @@ struct Sidebar: View {
         .padding(.horizontal, 10)
         .frame(maxHeight: .infinity, alignment: .top)
         .background {
-            Rectangle().fill(model.theme.deep.color.opacity(0.55)).ignoresSafeArea()
+            Rectangle().fill(model.surface(model.theme.deep, 0.55)).ignoresSafeArea()
                 .overlay(alignment: .trailing) { Rectangle().fill(.white.opacity(0.08)).frame(width: 1) }
         }
         .animation(.easeInOut(duration: 0.45), value: model.theme)
