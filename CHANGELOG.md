@@ -2,7 +2,7 @@
 
 All notable changes to nxnative Launcher. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] - 2026-10-27
 
 ### Added
 
@@ -49,5 +49,6 @@ The first release.
 - Apple silicon and macOS 26 or later only.
 - The app is not notarized by Apple. The first launch needs **Open Anyway** in System Settings → Privacy & Security (see the README).
 
+[1.2.0]: https://github.com/rexxless/nxlauncher/releases/tag/v1.2.0
 [1.1.0]: https://github.com/rexxless/nxlauncher/releases/tag/v1.1.0
 [1.0.0]: https://github.com/rexxless/nxlauncher/releases/tag/v1.0.0
