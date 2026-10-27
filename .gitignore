@@ -1,0 +1,13 @@
+.DS_Store
+/.build/
+/build/
+/.swiftpm/
+*.xcodeproj/
+DerivedData/
+
+# Game files and keys never belong here.
+*.keys
+*.nsp
+*.nsz
+*.xci
+*.xcz
