@@ -23,7 +23,8 @@ swift build -c release --arch arm64
 BIN=$(swift build -c release --arch arm64 --show-bin-path)/NxLauncher
 
 APP=build/NxLauncher.app
-VERSION=$(git describe --tags --always 2>/dev/null || echo 0.1)
+# The tag without its v: v1.0.0 → 1.0.0; past the tag, 1.0.0-3-g<commit>.
+VERSION=$(git describe --tags --always 2>/dev/null | sed 's/^v//' || echo 0.1)
 rm -rf "$APP.partial"
 mkdir -p "$APP.partial/Contents/MacOS" "$APP.partial/Contents/Resources"
 cp "$BIN" "$APP.partial/Contents/MacOS/NxLauncher"

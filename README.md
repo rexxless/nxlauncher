@@ -7,7 +7,9 @@ A game library for [nxnative](https://github.com/seedds/nxnative) on the Mac. nx
 - **Playtime**: every session is timed, including games opened from Finder while the launcher runs. Each game shows its total, when it was last played and the last eight weeks as a chart.
 - **Artwork and titles** come from the game's own app: its icon, its name and the colors taken from the icon. nxnative's games table adds the engine, SDK, build and graphics API.
 
-The look follows macOS 26's Liquid Glass: glass controls and cards over a backdrop drawn from the selected game's icon.
+The look follows macOS 26's Liquid Glass: glass controls and cards over a backdrop drawn from the selected game's icon. Settings can switch the buttons to solid colors and change the window's color.
+
+What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements
 
@@ -15,25 +17,56 @@ The look follows macOS 26's Liquid Glass: glass controls and cards over a backdr
 - nxnative's build tools: Xcode, the .NET SDK 10, and Homebrew's `zstd` and `spirv-cross`. nxnative itself is inside the launcher, and its Python modules go into a private environment with one click.
 - Your own `prod.keys`. The launcher stores only the file's location, passes it to nxnative, and never opens or shows the file.
 
-## Build
+## Install
 
-Building needs Swift 6.2 or later: Xcode or the Command Line Tools. nxnative is the submodule `vendor/nxnative`:
+Choose either way. Both give the same app.
+
+### Download a release
+
+1. Download `NxLauncher-<version>.dmg` from the [latest release](https://github.com/rexxless/nxlauncher/releases/latest).
+2. Open it and drag **NxLauncher** onto **Applications**. Eject the disk image.
+3. Open NxLauncher from Applications or Launchpad.
+
+**The first launch needs one extra step.** The app is not notarized by Apple, so the first time macOS stops it, saying Apple could not verify it is free of malware. Either:
+
+- Click **Done**, open **System Settings → Privacy & Security**, scroll down to the message that NxLauncher was blocked and click **Open Anyway**, then confirm. macOS asks only once.
+- Or remove the download mark in Terminal:
+
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/NxLauncher.app
+  ```
+
+### Build it yourself
+
+Building needs Swift 6.2 or later, from Xcode or the Command Line Tools. Apps you build on your own Mac open without the step above.
 
 ```sh
-git submodule update --init    # once, after cloning
-scripts/make_app.sh            # → build/NxLauncher.app (ad-hoc signed)
-scripts/make_app.sh --sign "Developer ID Application: <name> (<team>)"
-scripts/test.sh                # the tests (swift test, with the SDK settings below)
+git clone --recurse-submodules https://github.com/rexxless/nxlauncher.git
+cd nxlauncher
+scripts/make_app.sh                # → build/NxLauncher.app
+cp -R build/NxLauncher.app /Applications/
 ```
 
-The Command Line Tools' newest SDK declares SwiftUI's `@State` as a macro, but its plugin ships only with Xcode. Without Xcode, `make_app.sh` builds against a macOS 26 SDK from the Command Line Tools. For a plain `swift build` without Xcode, set `SDKROOT` the same way:
+Already cloned without `--recurse-submodules`? Run `git submodule update --init` first: nxnative is the submodule `vendor/nxnative`.
+
+The other scripts:
+
+```sh
+scripts/make_dmg.sh                # → build/NxLauncher-<version>.dmg, the app beside an Applications link
+scripts/make_app.sh --sign "Developer ID Application: <name> (<team>)"   # make_dmg.sh takes --sign too
+scripts/test.sh                    # the tests (swift test, with the SDK settings below)
+```
+
+The version comes from the git tag (`v1.0.0` → 1.0.0). The Command Line Tools' newest SDK declares SwiftUI's `@State` as a macro, but its plugin ships only with Xcode. Without Xcode, `make_app.sh` builds against a macOS 26 SDK from the Command Line Tools. For a plain `swift build` without Xcode, set `SDKROOT` the same way:
 
 ```sh
 SDKROOT=$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.*.sdk | sort -V | tail -1) swift build
 # swift test also needs -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing: scripts/test.sh adds it
 ```
 
-## First run
+## Use
+
+### First run
 
 1. On first launch the launcher unpacks the nxnative it ships (about 150 MB) into `~/Library/Application Support/NxLauncher/nxnative`. Home's **Ready to Build** list shows anything still missing, each with a button that fixes it:
    - **Python modules**: **Install** makes a private Python environment (`~/Library/Application Support/NxLauncher/python`) with lz4, capstone and fontTools (and backports.zstd before Python 3.14). The system's and Homebrew's Python are left alone.
@@ -45,6 +78,30 @@ SDKROOT=$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.*.sdk | sort -
 
 Games you built before the launcher can be added in Settings. Add the folder that holds them (the launcher searches it two levels deep), or add the apps themselves.
 
+### Every day
+
+- **Library**: Home, All Games, Recently Played, Favorites (right-click a game to add it) and a list per graphics API, in the sidebar. Search with ⌘F.
+- **A game's page** shows its playtime chart, its details and **Play**.
+- **Builds** run one at a time: each one uses every core and a lot of memory. Cancelling a build interrupts nxnative as Ctrl-C would, so it stops cleanly.
+- **Settings** (⌘,): library folders, the keys file, the Python and nxnative in use, and **Appearance**: Liquid Glass or solid buttons, the button color and opacity, the window color when no game is chosen, and how strongly the window is tinted.
+
+| Shortcut | Does |
+|---|---|
+| ⌘N | Add Game |
+| ⌘1 / ⌘2 / ⌘3 / ⌘4 | Home / All Games / Builds / Playtime |
+| ⌘F | Search |
+| ⌘[ | Back from a game's page |
+| ⌘R | Rescan the library |
+| ⌘, | Settings |
+
+### Update
+
+Install the new version the same way, over the old one: drag it onto Applications and choose **Replace**, or rebuild with `git pull --recurse-submodules && scripts/make_app.sh`. The library, playtime and settings live outside the app and carry over. A new launcher brings its own nxnative and unpacks it on its first launch.
+
+### Uninstall
+
+Delete `/Applications/NxLauncher.app`, then, to remove everything else, `~/Library/Application Support/NxLauncher` and the settings (`defaults delete org.nxnative-launcher.app`). The games you built stay in their NSP folders.
+
 ## Where things are
 
 | What | Where |
@@ -52,11 +109,9 @@ Games you built before the launcher can be added in Settings. Add the folder tha
 | Library and playtime | `~/Library/Application Support/NxLauncher/` (`library.json`, `playtime.json`) |
 | The shipped nxnative, unpacked | `~/Library/Application Support/NxLauncher/nxnative` (replaced when the launcher brings a new version) |
 | The private Python | `~/Library/Application Support/NxLauncher/python` |
-| Settings (paths only) | the app's user defaults (`org.nxnative-launcher.app`) |
+| Settings (paths and appearance) | the app's user defaults (`org.nxnative-launcher.app`) |
 | Built games | the NSP folder, as nxnative writes them (`<game name>.app`) |
 | A game's save and log | nxnative's: `~/Library/Application Support/nxnative/<title ID>/`, `~/Library/Logs/nxnative/<title ID>.log` |
-
-Builds run one at a time: each one uses every core and a lot of memory. Cancelling a build interrupts nxnative as Ctrl-C would, so it stops cleanly.
 
 ## Layout
 
@@ -66,15 +121,21 @@ Builds run one at a time: each one uses every core and a lot of memory. Cancelli
   - `GameBundle` / `LibraryState`: nxnative apps and the library.
   - `Catalog`: nxnative's games table.
   - `PlaytimeLog`: sessions and totals.
-  - `Palette`: the colors taken from an icon.
+  - `Palette`: the colors taken from an icon. `Appearance`: the user's buttons and window color.
   - `Preflight`: the checks before a build, and what fixes each one.
   - `Engine`: unpacking the shipped nxnative. `PythonSetup`: the private Python.
 - `Sources/NxLauncher`: the SwiftUI app.
 - `vendor/nxnative`: nxnative, as a submodule. `make_app.sh` packs it into the app as `nxnative.tar.gz`.
-- `scripts/make_app.sh`: builds the app bundle. `scripts/make_icon.swift` draws the launcher's icon.
+- `scripts/make_app.sh`: builds the app bundle. `scripts/make_dmg.sh`: packs it into a disk image. `scripts/make_icon.swift` draws the launcher's icon.
 - `docs/design.md`: the design.
 
 For layout work without a screen recorder, `NXL_SNAPSHOT=<folder> build/NxLauncher.app/Contents/MacOS/NxLauncher` renders each screen to `<folder>/<screen>.png` and quits. The renderer draws neither glass nor text fields as the window does.
+
+## Releasing
+
+1. Add the version to `CHANGELOG.md`, commit, and tag it: `git tag -a v1.1.0 -m "nxnative Launcher 1.1.0"`.
+2. `scripts/make_dmg.sh` → `build/NxLauncher-1.1.0.dmg`.
+3. `git push --follow-tags`, then `gh release create v1.1.0 build/NxLauncher-1.1.0.dmg --title "nxnative Launcher 1.1.0" --notes "…"`.
 
 ## Credits
 
