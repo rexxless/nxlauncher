@@ -88,13 +88,13 @@ public final class BuildRunner: @unchecked Sendable {
         process.standardError = err
 
         let messages = MessageLog()
-        let stdoutDone = Self.readLines(out.fileHandleForReading) { line in
+        let stdoutDone = ProcessLines.read(out.fileHandleForReading) { line in
             if let ev = BuildEvent.parse(line) {
                 if case let .say(msg) = ev { messages.append(msg) }
                 onEvent(ev)
             } else if !line.isEmpty { onLog(line) }
         }
-        let stderrDone = Self.readLines(err.fileHandleForReading) { line in if !line.isEmpty { onLog(line) } }
+        let stderrDone = ProcessLines.read(err.fileHandleForReading) { line in if !line.isEmpty { onLog(line) } }
 
         do {
             try process.run()
@@ -119,47 +119,6 @@ public final class BuildRunner: @unchecked Sendable {
         DispatchQueue.global().asyncAfter(deadline: .now() + 10) { [process] in
             if process.isRunning { process.terminate() }
         }
-    }
-
-    /// Splits a pipe's output into lines as it arrives. (FileHandle.bytes can hold a pipe's output back until it fills or closes,
-    /// which would freeze the progress bar; the readability handler sees every write.)
-    private static func readLines(_ handle: FileHandle, _ each: @escaping @Sendable (String) -> Void) -> Task<Void, Never> {
-        let splitter = LineSplitter(each)
-        return Task.detached {
-            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-                handle.readabilityHandler = { h in
-                    let data = h.availableData
-                    if data.isEmpty {
-                        h.readabilityHandler = nil
-                        splitter.finish()
-                        done.resume()
-                    } else {
-                        splitter.feed(data)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private final class LineSplitter: @unchecked Sendable {
-    private var pending = Data()
-    private let each: @Sendable (String) -> Void
-
-    init(_ each: @escaping @Sendable (String) -> Void) { self.each = each }
-
-    // Called only from the handle's serial readability queue.
-    func feed(_ data: Data) {
-        pending.append(data)
-        while let nl = pending.firstIndex(of: 0x0A) {
-            let line = pending[pending.startIndex..<nl]
-            pending.removeSubrange(pending.startIndex...nl)
-            each(String(decoding: line, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
-        }
-    }
-
-    func finish() {
-        if !pending.isEmpty { each(String(decoding: pending, as: UTF8.self)); pending.removeAll() }
     }
 }
 

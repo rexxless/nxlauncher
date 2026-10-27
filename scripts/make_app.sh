@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds NxLauncher.app (release, Apple silicon) into build/: swift build, then the bundle, its icon and an ad-hoc signature.
+# Builds NxLauncher.app (release, Apple silicon) into build/: swift build, then the bundle, its icon, the nxnative it ships
+# (a git archive of the vendor/nxnative submodule) and an ad-hoc signature.
 # Works with the Command Line Tools alone. Their newest SDK may declare SwiftUI's @State as a macro whose plugin ships only with Xcode;
 # without Xcode the build then uses a macOS 26 SDK from the Command Line Tools.
 # Usage: scripts/make_app.sh [--sign "<identity>"]
@@ -8,6 +9,10 @@ cd "$(dirname "$0")/.."
 
 SIGN=-
 if [ "${1:-}" = "--sign" ]; then SIGN=$2; fi
+
+if [ ! -e vendor/nxnative/scripts/build_ipa_from_nsp.py ]; then
+  echo "vendor/nxnative is empty: run git submodule update --init" >&2; exit 1
+fi
 
 if ! xcode-select -p | grep -q '\.app/'; then
   SDK=$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.*.sdk 2>/dev/null | sort -V | tail -1 || true)
@@ -32,6 +37,10 @@ for n in 16 32 128 256 512; do
   sips -s format png -z $((n * 2)) $((n * 2)) "$TMP/icon.png" --out "$TMP/AppIcon.iconset/icon_${n}x${n}@2x.png" >/dev/null
 done
 iconutil -c icns "$TMP/AppIcon.iconset" -o "$APP.partial/Contents/Resources/AppIcon.icns"
+
+# nxnative, as committed in the submodule: the launcher unpacks it on first launch (Engine.swift).
+git -C vendor/nxnative archive --format=tar HEAD | gzip -9 > "$APP.partial/Contents/Resources/nxnative.tar.gz"
+git -C vendor/nxnative rev-parse HEAD > "$APP.partial/Contents/Resources/nxnative.version"
 
 cat > "$APP.partial/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

@@ -136,3 +136,13 @@ README.md, LICENSE (MIT, as nxnative's), .gitignore (build/, .build/, .DS_Store,
   - After quitting, its playtime shows in the card and the detail chart.
 - **Cancel** mid-build: the status shows "Cancelled" and the process is gone (`pgrep -f build_ipa_from_nsp` is empty).
 - **Repo hygiene:** `git grep -nE '/Users/|gmail|\.keys'` shows only `.gitignore` patterns and docs placeholders.
+
+## Revision 2: the shipped engine and fix buttons
+
+- **Color.** With no game to take colors from, the window is deep indigo (`Palette.fallback`: base #3B3F8F, deep #1C1E4A, lavender accent), not red.
+- **nxnative ships in the launcher.** It is the submodule `vendor/nxnative`; `make_app.sh` packs a `git archive` of it into `Contents/Resources/nxnative.tar.gz` with its commit in `nxnative.version`. A build writes into its checkout (`dm/host/gen`, the profile's shader tables), so the signed copy is not run in place: `Engine.unpack` extracts it into `~/Library/Application Support/NxLauncher/nxnative` once per version, beside the old copy, and swaps it in only when complete. Settings can still choose a clone instead (an empty `checkoutPath` means the shipped one).
+- **Every failed check has a fix** (`Preflight.Fix`), shown as a button in the Ready to Build list:
+  - Python modules: `PythonSetup` makes a venv in `~/Library/Application Support/NxLauncher/python` from the chosen Python and pip-installs the missing modules (`backports.zstd` too before Python 3.14), then uses its Python. Homebrew's Python refuses plain pip installs, and the system's is left alone.
+  - Keys file and engine: go to Settings, scroll to the row and highlight it; in Settings the button opens the file picker.
+  - Build tools (new check, the script's `check_prereqs`): `brew install zstd spirv-cross`, or links to Xcode and .NET.
+- Child processes for these (tar, pip, brew, the module probe) run through `ProcessLines`, which reads output as it comes and waits on the termination handler: blocking waits starved Swift's concurrency pool when tests ran in parallel.

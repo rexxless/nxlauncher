@@ -44,8 +44,9 @@ public struct Palette: Equatable, Hashable, Sendable, Codable {
     public var accent: RGB
     public var swatches: [RGB]   // the clusters, most vivid first: the mesh gradient's points
 
-    public static let fallback = Palette(base: RGB(0.80, 0.12, 0.16), deep: RGB(0.45, 0.05, 0.09), accent: RGB(1.0, 0.75, 0.25),
-                                         swatches: [RGB(0.80, 0.12, 0.16), RGB(0.45, 0.05, 0.09), RGB(1.0, 0.75, 0.25), RGB(0.30, 0.04, 0.12)])
+    /// Deep indigo: the window before any game is chosen, and for an icon with no usable color.
+    public static let fallback = Palette(base: RGB(0.23, 0.25, 0.56), deep: RGB(0.11, 0.12, 0.29), accent: RGB(0.72, 0.68, 1.0),
+                                         swatches: [RGB(0.23, 0.25, 0.56), RGB(0.11, 0.12, 0.29), RGB(0.72, 0.68, 1.0), RGB(0.20, 0.13, 0.40)])
 
     /// Text and the Play button go dark on a light base.
     public var isLight: Bool { base.luminance > 0.6 }

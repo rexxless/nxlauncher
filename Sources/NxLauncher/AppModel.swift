@@ -7,6 +7,9 @@ enum Route: Hashable {
     case home, all, recent, favorites, graphics(String), builds, playtime, settings
 }
 
+/// A Settings row to scroll to and highlight, when a fix button elsewhere sends the user there.
+enum SettingsFocus: Hashable { case engine, keys }
+
 /// One build in the queue: its request, its folded progress and its log.
 @MainActor @Observable
 final class BuildJob: Identifiable {
@@ -36,6 +39,7 @@ final class BuildJob: Identifiable {
 @MainActor @Observable
 final class AppModel {
     // Settings: paths only, kept in UserDefaults (never in the repository; the keys file is never read by the launcher).
+    // An empty checkoutPath means the nxnative shipped in the app.
     var checkoutPath: String { didSet { defaults.set(checkoutPath, forKey: "checkoutPath"); reloadCatalog() } }
     var keysPath: String { didSet { defaults.set(keysPath, forKey: "keysPath") } }
     var pythonPath: String { didSet { defaults.set(pythonPath, forKey: "pythonPath") } }
@@ -44,6 +48,7 @@ final class AppModel {
     var detail: GameBundle?
     var search = ""
     var showingAddGame = false
+    var settingsFocus: SettingsFocus?
 
     private(set) var games: [GameBundle] = []
     private(set) var catalog = Catalog()
@@ -54,6 +59,10 @@ final class AppModel {
     private(set) var palettes: [String: Palette] = [:]
     private(set) var sizes: [String: Int64] = [:]
     var preflight: [Preflight.Check] = []
+    private(set) var engineSource: Preflight.EngineSource = .custom
+    /// The checks whose fix is running, and the last line each one wrote (or its error).
+    private(set) var fixing: Set<String> = []
+    private(set) var fixStatus: [String: String] = [:]
 
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private let store = Store.default
@@ -69,6 +78,7 @@ final class AppModel {
         playtime.closeStale()
         reloadCatalog()
         rescan()
+        prepareEngine()
         launcher = GameLauncher(
             began: { [weak self] id in self?.sessionBegan(id) },
             ended: { [weak self] id in self?.sessionEnded(id) })
@@ -81,7 +91,39 @@ final class AppModel {
 
     // MARK: Library
 
-    var checkoutURL: URL? { checkoutPath.isEmpty ? nil : URL(fileURLWithPath: checkoutPath) }
+    var usesBundledEngine: Bool { checkoutPath.isEmpty }
+
+    var checkoutURL: URL? {
+        if !checkoutPath.isEmpty { return URL(fileURLWithPath: checkoutPath) }
+        if case .bundled = engineSource { return Engine.defaultFolder }
+        return nil
+    }
+
+    /// Unpacks the shipped nxnative when this version is not unpacked yet. A build without the tarball (swift run) has no bundled engine.
+    func prepareEngine() {
+        guard usesBundledEngine else { engineSource = .custom; return }
+        guard let (tarball, version) = Engine.bundled() else {
+            engineSource = .failed("this build of the launcher has no nxnative inside: choose a clone"); return
+        }
+        if Engine.installedVersion(at: Engine.defaultFolder) == version { engineSource = .bundled(version: version); reloadCatalog(); return }
+        engineSource = .unpacking
+        Task {
+            do {
+                try await Engine.unpack(tarball: tarball, version: version, to: Engine.defaultFolder)
+                engineSource = .bundled(version: version)
+            } catch {
+                engineSource = .failed(error.localizedDescription)
+            }
+            reloadCatalog()
+            await runPreflight()
+        }
+    }
+
+    func useBundledEngine() {
+        checkoutPath = ""
+        prepareEngine()
+        Task { await runPreflight() }
+    }
 
     func reloadCatalog() {
         catalog = checkoutURL.map(Catalog.load) ?? Catalog()
@@ -207,12 +249,69 @@ final class AppModel {
     var activeCount: Int { builds.filter(\.isActive).count }
 
     func runPreflight() async {
-        preflight = await Preflight.run(checkout: checkoutURL,
+        preflight = await Preflight.run(checkout: checkoutURL, source: engineSource,
                                         python: pythonPath.isEmpty ? nil : URL(fileURLWithPath: pythonPath),
                                         keys: keysPath.isEmpty ? nil : URL(fileURLWithPath: keysPath))
     }
 
     var readyToBuild: Bool { !preflight.isEmpty && preflight.allSatisfy(\.ok) }
+
+    // MARK: Fixing what preflight found
+
+    /// Runs a check's fix. Choosing a file happens in Settings: from anywhere else the button goes there and points at the row.
+    func perform(_ fix: Preflight.Fix, for check: String) {
+        switch fix {
+        case .chooseKeys, .chooseEngine:
+            let focus: SettingsFocus = fix == .chooseKeys ? .keys : .engine
+            if route == .settings && !showingAddGame { choose(focus) } else {
+                showingAddGame = false; detail = nil; route = .settings; settingsFocus = focus
+            }
+        case .installModules(let modules):
+            let base = pythonPath.isEmpty ? Preflight.findPython() : URL(fileURLWithPath: pythonPath)
+            guard let base else { return }
+            runFix(check) { log in
+                switch await PythonSetup.install(base: base, packages: PythonSetup.packages(for: modules), onLine: log) {
+                case .success(let py): return .success(py)
+                case .failure(let e): return .failure(e)
+                }
+            } done: { py in self.pythonPath = py.path }
+        case .brewInstall(let formulae):
+            let env = BuildRunner.environment()
+            guard let brew = Preflight.which("brew", environment: env) else { return }
+            runFix(check) { log in
+                let status = await ProcessLines.run(brew, ["install"] + formulae, environment: env, onLine: log)
+                return status == 0 ? .success(brew) : .failure(PythonSetup.InstallError(message: "brew install stopped (exit \(status.map(String.init) ?? "?"))"))
+            } done: { _ in }
+        case .openURL(let url, _):
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Opens the picker for a Settings row and keeps the choice.
+    func choose(_ focus: SettingsFocus) {
+        switch focus {
+        case .keys:
+            if let u = pick(directory: false) { keysPath = u.path }
+        case .engine:
+            if let u = pick(directory: true) { checkoutPath = u.path; prepareEngine() }
+        }
+        Task { await runPreflight() }
+    }
+
+    private func runFix(_ check: String, _ work: @escaping @Sendable (@escaping @Sendable (String) -> Void) async -> Result<URL, PythonSetup.InstallError>,
+                        done: @escaping (URL) -> Void) {
+        guard !fixing.contains(check) else { return }
+        fixing.insert(check); fixStatus[check] = "starting…"
+        Task {
+            let result = await work { line in Task { @MainActor in self.fixStatus[check] = line } }
+            fixing.remove(check)
+            switch result {
+            case .success(let url): fixStatus[check] = nil; done(url)
+            case .failure(let e): fixStatus[check] = "failed: \(e.message)"
+            }
+            await runPreflight()
+        }
+    }
 
     func enqueueBuild(nspFolder: URL, language: String?) {
         guard let checkout = checkoutURL else { return }

@@ -210,3 +210,123 @@ final class Box<T>: @unchecked Sendable {
         #expect(Palette.from(pixels: []) == .fallback)
     }
 }
+
+@Suite struct FallbackColor {
+    @Test func isACalmIndigo() {
+        let b = Palette.fallback.base
+        #expect(b.b > b.r && b.b > b.g)          // blue-violet, not red
+        #expect(b.hsb.s < 0.7 && b.hsb.v < 0.7)  // muted
+        #expect(!Palette.fallback.isLight)
+    }
+}
+
+private func script(_ dir: URL, _ name: String, _ body: String) throws -> URL {
+    let u = dir.appending(path: name)
+    try ("#!/bin/sh\n" + body + "\n").write(to: u, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: u.path)
+    return u
+}
+
+@Suite struct EngineTests {
+    private func tarball(_ dir: URL, _ text: String) async throws -> URL {
+        let src = dir.appending(path: "src-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: src.appending(path: "scripts"), withIntermediateDirectories: true)
+        try text.write(to: src.appending(path: "scripts/build_ipa_from_nsp.py"), atomically: true, encoding: .utf8)
+        let tar = dir.appending(path: "\(UUID().uuidString).tar.gz")
+        let status = await ProcessLines.run(URL(fileURLWithPath: "/usr/bin/tar"), ["-czf", tar.path, "-C", src.path, "."]) { _ in }
+        #expect(status == 0)
+        return tar
+    }
+
+    @Test func unpacksOncePerVersion() async throws {
+        let dir = try tempDir(), folder = dir.appending(path: "nxnative")
+        let v1 = try await tarball(dir, "one")
+        try await Engine.unpack(tarball: v1, version: "aaaa", to: folder)
+        #expect(Engine.installedVersion(at: folder) == "aaaa")
+        let file = folder.appending(path: "scripts/build_ipa_from_nsp.py")
+        #expect(try String(contentsOf: file, encoding: .utf8) == "one")
+
+        try "built".write(to: folder.appending(path: "gen.txt"), atomically: true, encoding: .utf8)
+        try await Engine.unpack(tarball: v1, version: "aaaa", to: folder)   // same version: left alone
+        #expect(FileManager.default.fileExists(atPath: folder.appending(path: "gen.txt").path))
+
+        let v2 = try await tarball(dir, "two")
+        try await Engine.unpack(tarball: v2, version: "bbbb", to: folder)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "two")
+        #expect(Engine.installedVersion(at: folder) == "bbbb")
+        #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "gen.txt").path))
+    }
+
+    @Test func aBadTarballKeepsTheOldEngine() async throws {
+        let dir = try tempDir(), folder = dir.appending(path: "nxnative")
+        try await Engine.unpack(tarball: try await tarball(dir, "one"), version: "aaaa", to: folder)
+        let bad = dir.appending(path: "bad.tar.gz")
+        try "not a tarball".write(to: bad, atomically: true, encoding: .utf8)
+        await #expect(throws: Engine.UnpackError.self) { try await Engine.unpack(tarball: bad, version: "cccc", to: folder) }
+        #expect(Engine.installedVersion(at: folder) == "aaaa")
+        #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "nxnative.partial").path))
+    }
+}
+
+@Suite struct PreflightFixes {
+    @Test func eachFailureHasItsFix() async throws {
+        let dir = try tempDir()
+        let py = try script(dir, "python3", "echo 'a warning' >&2; echo 'missing: capstone backports.zstd'")
+        let bin = dir.appending(path: "bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let checks = await Preflight.run(checkout: nil, source: .custom, python: py, keys: dir.appending(path: "none.keys"),
+                                         environment: ["PATH": bin.path], developerDir: "/Library/Developer/CommandLineTools")
+        let byName = Dictionary(uniqueKeysWithValues: checks.map { ($0.name, $0) })
+        #expect(byName[Preflight.engineName]?.fix == .chooseEngine)
+        #expect(byName[Preflight.pythonName]?.fix == .installModules(["capstone", "backports.zstd"]))
+        #expect(byName[Preflight.keysName]?.fix == .chooseKeys)
+        // No brew on PATH: the first missing tool is Xcode.
+        #expect(byName[Preflight.toolsName]?.detail == "missing: Xcode, .NET SDK 10, zstd, spirv-cross")
+        if case .openURL(_, let label)? = byName[Preflight.toolsName]?.fix { #expect(label == "Get Xcode") } else { Issue.record("no Xcode link") }
+    }
+
+    @Test func toolsFoundOnPath() throws {
+        let dir = try tempDir()
+        for t in ["dotnet", "zstd", "brew"] { _ = try script(dir, t, "exit 0") }
+        #expect(Preflight.missingTools(environment: ["PATH": dir.path], developerDir: "/Applications/Xcode.app/Contents/Developer") == ["spirv-cross"])
+        #expect(Preflight.toolsCheck(environment: ["PATH": dir.path], developerDir: "/Applications/Xcode.app/Contents/Developer").fix == .brewInstall(["spirv-cross"]))
+    }
+
+    @Test func engineStates() throws {
+        let dir = try tempDir()
+        try FileManager.default.createDirectory(at: dir.appending(path: "scripts"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir.appending(path: "dm/games"), withIntermediateDirectories: true)
+        try "".write(to: dir.appending(path: "scripts/build_ipa_from_nsp.py"), atomically: true, encoding: .utf8)
+        try "".write(to: dir.appending(path: "dm/games/README.md"), atomically: true, encoding: .utf8)
+        #expect(Preflight.engineCheck(checkout: dir, source: .bundled(version: "0123456789abcdef")).detail == "bundled · 0123456")
+        #expect(Preflight.engineCheck(checkout: dir, source: .custom).ok)
+        #expect(Preflight.engineCheck(checkout: nil, source: .unpacking).fix == nil)
+        #expect(Preflight.engineCheck(checkout: nil, source: .failed("x")).fix == .chooseEngine)
+    }
+}
+
+@Suite struct PythonSetupTests {
+    @Test func makesTheVenvThenInstalls() async throws {
+        let dir = try tempDir(), venv = dir.appending(path: "venv"), record = dir.appending(path: "calls.txt")
+        // The fake base Python makes a venv whose python3 records each call.
+        let base = try script(dir, "base", """
+            echo "base $*" >> '\(record.path)'
+            mkdir -p "$3/bin"
+            printf '#!/bin/sh\\necho "venv $*" >> %s\\n' '\(record.path)' > "$3/bin/python3"
+            chmod +x "$3/bin/python3"
+            """)
+        let result = await PythonSetup.install(base: base, packages: PythonSetup.packages(for: ["fontTools", "backports.zstd"]), venv: venv) { _ in }
+        #expect(result == .success(venv.appending(path: "bin/python3")))
+        let calls = try String(contentsOf: record, encoding: .utf8).split(separator: "\n").map(String.init)
+        #expect(calls == ["base -m venv \(venv.path)",
+                          "venv -m pip install --disable-pip-version-check --upgrade pip",
+                          "venv -m pip install --disable-pip-version-check fonttools backports.zstd"])
+    }
+
+    @Test func reportsTheFailingLine() async throws {
+        let dir = try tempDir()
+        let base = try script(dir, "base", "echo 'ERROR: no network'; exit 1")
+        let result = await PythonSetup.install(base: base, packages: ["lz4"], venv: dir.appending(path: "venv")) { _ in }
+        #expect(result == .failure(PythonSetup.InstallError(message: "ERROR: no network")))
+    }
+}
