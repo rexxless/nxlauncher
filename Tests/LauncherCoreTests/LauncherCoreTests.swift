@@ -365,19 +365,69 @@ private func script(_ dir: URL, _ name: String, _ body: String) throws -> URL {
     }
 
     @Test func comparesWithTheInstalledCommit() throws {
-        let c = try EngineUpdate.parseCompare(Data(#"{"status":"ahead","ahead_by":12,"behind_by":0}"#.utf8))
-        #expect(c.status == "ahead" && c.aheadBy == 12)
+        let json = #"{"status":"ahead","ahead_by":2,"commits":[{"sha":"old1","commit":{"committer":{"date":"2026-10-24T00:00:00Z"},"message":"First"}},{"sha":"new2","commit":{"committer":{"date":"2026-10-25T00:00:00Z"},"message":"Second\n\nbody"}}]}"#
+        let c = try EngineUpdate.parseCompare(Data(json.utf8))
+        #expect(c.status == "ahead" && c.aheadBy == 2)
+        #expect(c.changes.map(\.message) == ["Second", "First"])   // newest first
         let latest = EngineUpdate.Release(version: .init(sha: "b", date: Date(timeIntervalSince1970: 200)), message: "")
         let installed = Engine.Version(sha: "a", date: Date(timeIntervalSince1970: 100))
-        #expect(EngineUpdate.status(latest: latest, installed: installed, compare: ("ahead", 12)).isNewer)
-        #expect(!EngineUpdate.status(latest: latest, installed: installed, compare: ("behind", 0)).isNewer)
+        #expect(EngineUpdate.status(latest: latest, installed: installed, compare: .init(status: "ahead", aheadBy: 12, changes: [])).isNewer)
+        #expect(!EngineUpdate.status(latest: latest, installed: installed, compare: .init(status: "behind", aheadBy: 0, changes: [])).isNewer)
         #expect(EngineUpdate.status(latest: latest, installed: installed, compare: nil).isNewer)       // dates decide
+        #expect(EngineUpdate.status(latest: latest, installed: installed, compare: nil).changes == [latest])
         #expect(!EngineUpdate.status(latest: latest, installed: .init(sha: "a", date: Date(timeIntervalSince1970: 300)), compare: nil).isNewer)
     }
 
     @Test func rateLimitIsExplained() {
         let r = HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 403, httpVersion: nil, headerFields: nil)!
-        #expect(throws: EngineUpdate.UpdateError(message: "GitHub's rate limit was reached, try again later")) { try EngineUpdate.checkResponse(r) }
+        #expect(throws: EngineUpdate.UpdateError(message: "GitHub's rate limit was reached, try again later", status: 403)) { try EngineUpdate.checkResponse(r) }
+    }
+}
+
+@Suite struct LauncherUpdateTests {
+    @Test func comparesVersions() {
+        #expect(LauncherUpdate.isNewer("1.2.0", than: "1.1.0"))
+        #expect(LauncherUpdate.isNewer("1.10.0", than: "1.9.3"))
+        #expect(LauncherUpdate.isNewer("2", than: "1.9"))
+        #expect(!LauncherUpdate.isNewer("1.1.0", than: "1.1.0"))
+        #expect(!LauncherUpdate.isNewer("1.1.0", than: "1.1.0-3-gabc1234"))    // a build past the tag
+        #expect(!LauncherUpdate.isNewer("1.0.0", than: "1.1.0"))
+        #expect(LauncherUpdate.isNewer("v1.1.1", than: "1.1.0"))
+    }
+
+    @Test func parsesTheLatestRelease() throws {
+        let json = #"{"tag_name":"v1.2.0","body":"Intro\n\n## Install\n\n1. Drag it\n\n## Added\n\n- **Thing**\n\n---\nSHA-256: x","html_url":"https://github.com/rexxless/nxlauncher/releases/tag/v1.2.0","draft":false,"assets":[{"name":"notes.txt","browser_download_url":"https://example.com/n"},{"name":"NxLauncher-1.2.0.dmg","browser_download_url":"https://example.com/d.dmg"}]}"#
+        let r = try LauncherUpdate.parseRelease(Data(json.utf8))
+        #expect(r.version == "1.2.0")
+        #expect(r.dmg?.lastPathComponent == "d.dmg")
+        #expect(LauncherUpdate.changes(in: r.notes) == "Intro\n\n## Added\n\n- **Thing**")
+    }
+
+    @Test func checksTheAppInTheImage() throws {
+        let dir = try tempDir(), app = dir.appending(path: "NxLauncher.app/Contents")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let info: [String: Any] = ["CFBundleIdentifier": "org.nxnative-launcher.app", "CFBundleShortVersionString": "1.2.0"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: app.appending(path: "Info.plist"))
+        try LauncherUpdate.check(appIn: dir, version: "1.2.0", bundleID: "org.nxnative-launcher.app")
+        #expect(throws: LauncherUpdate.UpdateError.self) { try LauncherUpdate.check(appIn: dir, version: "1.3.0", bundleID: "org.nxnative-launcher.app") }
+        #expect(throws: LauncherUpdate.UpdateError.self) { try LauncherUpdate.check(appIn: dir, version: "1.2.0", bundleID: "com.example.other") }
+        #expect(throws: LauncherUpdate.UpdateError.self) { try LauncherUpdate.check(appIn: dir.appending(path: "none"), version: "1.2.0", bundleID: "x") }
+    }
+
+    @Test func refusesATranslocatedApp() {
+        #expect(LauncherUpdate.cannotReplace(URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/ABC/d/NxLauncher.app")) != nil)
+    }
+
+    /// The disk image make_dmg.sh built, when there is one: mounted, checked, copied out and verified.
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: "build/NxLauncher-1.1.0.dmg")))
+    func stagesARealDiskImage() async throws {
+        let dir = try tempDir()
+        let app = try await LauncherUpdate.stage(dmg: URL(fileURLWithPath: "build/NxLauncher-1.1.0.dmg"), version: "1.1.0",
+                                                 bundleID: "org.nxnative-launcher.app", to: dir)
+        #expect(FileManager.default.fileExists(atPath: app.appending(path: "Contents/MacOS/NxLauncher").path))
+        await #expect(throws: LauncherUpdate.UpdateError.self) {
+            try await LauncherUpdate.stage(dmg: URL(fileURLWithPath: "build/NxLauncher-1.1.0.dmg"), version: "9.9.9", bundleID: "org.nxnative-launcher.app", to: dir)
+        }
     }
 }
 

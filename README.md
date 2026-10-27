@@ -96,17 +96,19 @@ Games you built before the launcher can be added in Settings. Add the folder tha
 
 ### Update
 
-Install the new version the same way, over the old one: drag it onto Applications and choose **Replace**, or rebuild with `git pull --recurse-submodules && scripts/make_app.sh`. The library, playtime and settings live outside the app and carry over. A new launcher brings its own nxnative and unpacks it on its first launch, unless the engine was already updated past it.
+From 1.2.0 the launcher updates itself: Settings → **Launcher** shows its version and checks GitHub's releases (on its own at launch and every six hours, or with **Check Now**). A new version is offered with its changelog. **Update and Relaunch** downloads its disk image, checks the app inside (this launcher, at that version, its signature intact), quits, swaps it in and opens it. It waits while a build runs. The launcher must be somewhere it can write to, such as Applications, not still inside the disk image.
+
+Or install the new version by hand, the same way as the first time, over the old one: drag it onto Applications and choose **Replace**, or rebuild with `git pull --recurse-submodules && scripts/make_app.sh`. The library, playtime and settings live outside the app and carry over. A new launcher brings its own nxnative and unpacks it on its first launch, unless the engine was already updated past it.
 
 #### nxnative updates
 
-nxnative gains games and fixes far more often than the launcher is released, so the launcher can update it on its own. Settings → **Engine** shows:
+nxnative gains games and fixes far more often than the launcher is released, so the launcher keeps an eye on it. Settings → **Engine** shows:
 
 - **Version**: the nxnative commit in use and its date, marked *bundled* (the app's own copy) or *updated* (downloaded since).
 - **Updates**: **Check Now** asks GitHub whether nxnative's `main` branch has newer commits. If so, the row shows how many, the latest commit's message and a **What's New** link, and **Update** downloads and installs it. **Use Bundled** goes back to the app's own copy.
-- **Auto-update** (on by default): checks at launch and every six hours, and installs what it finds. A notification says when nxnative was updated.
+- **Auto-update** (on by default): checks at launch and every six hours. When it finds a newer nxnative it asks first: a window lists the new commits, links to all the changes on GitHub, and installs only on **Update nxnative**. **Later** skips that version; Settings still offers it, and a newer one is asked about again.
 
-An update never replaces the engine under a running build: it waits until the builds are finished. After an update, **Ready to Build** checks again, in case the new nxnative needs another Python module. Your own clone (**Choose Clone…**) is never touched: update it with git. This is the only time the launcher goes online, to `api.github.com` and `codeload.github.com`.
+An update never replaces the engine under a running build: it waits until the builds are finished. After an update, **Ready to Build** checks again, in case the new nxnative needs another Python module. Your own clone (**Choose Clone…**) is never touched: update it with git. These checks are the only time the launcher goes online, to `api.github.com`, `codeload.github.com` and, for its own updates, the release downloads on `github.com`.
 
 ### Uninstall
 
@@ -133,7 +135,7 @@ Delete `/Applications/NxLauncher.app`, then, to remove everything else, `~/Libra
   - `PlaytimeLog`: sessions and totals.
   - `Palette`: the colors taken from an icon. `Appearance`: the user's buttons and window color.
   - `Preflight`: the checks before a build, and what fixes each one.
-  - `Engine`: unpacking the shipped nxnative. `EngineUpdate`: newer nxnative from GitHub. `PythonSetup`: the private Python.
+  - `Engine`: unpacking the shipped nxnative. `EngineUpdate`: newer nxnative from GitHub. `LauncherUpdate`: newer launcher releases, checked and swapped in. `PythonSetup`: the private Python.
 - `Sources/NxLauncher`: the SwiftUI app.
 - `vendor/nxnative`: nxnative, as a submodule. `make_app.sh` packs it into the app as `nxnative.tar.gz`.
 - `scripts/make_app.sh`: builds the app bundle. `scripts/make_dmg.sh`: packs it into a disk image. `scripts/make_icon.swift` draws the launcher's icon.

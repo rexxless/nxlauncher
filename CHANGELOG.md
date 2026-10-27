@@ -2,6 +2,17 @@
 
 All notable changes to nxnative Launcher. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Launcher updates**: Settings → Launcher shows the launcher's version and checks its GitHub releases, at launch and every six hours or with **Check Now**. A new version is offered with its changelog. **Update and Relaunch** downloads it, checks the app inside (the same app, the release's version, its signature intact), swaps it in and reopens. It waits while a build runs.
+- **Built by rexxless** in Settings, linking to GitHub, beside the credit for nxnative.
+
+### Changed
+
+- **nxnative updates ask first.** A scheduled check that finds a newer nxnative opens a window with the new commits and a link to all the changes, and installs only when you press **Update nxnative**. **Later** skips that version until a newer one appears.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added

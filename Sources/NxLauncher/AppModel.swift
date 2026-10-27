@@ -10,14 +10,27 @@ enum Route: Hashable {
 /// A Settings row to scroll to and highlight, when a fix button elsewhere sends the user there.
 enum SettingsFocus: Hashable { case engine, keys }
 
-/// Where the engine update stands, for Settings.
-enum EngineUpdateState: Equatable {
+/// Where an update of the engine or the launcher stands, for Settings.
+enum UpdateState<Found: Equatable>: Equatable {
     case idle
     case checking
     case upToDate(checked: Date)
-    case available(EngineUpdate.Status)
+    case available(Found)
     case updating
     case failed(String)
+}
+
+/// An update found by a scheduled check, waiting for the user to install it or not.
+enum UpdatePrompt: Identifiable {
+    case engine(EngineUpdate.Status)
+    case launcher(LauncherUpdate.Release)
+
+    var id: String {
+        switch self {
+        case .engine(let s): "engine-\(s.latest.version.sha)"
+        case .launcher(let r): "launcher-\(r.version)"
+        }
+    }
 }
 
 /// One build in the queue: its request, its folded progress and its log.
@@ -54,10 +67,17 @@ final class AppModel {
     var keysPath: String { didSet { defaults.set(keysPath, forKey: "keysPath") } }
     var pythonPath: String { didSet { defaults.set(pythonPath, forKey: "pythonPath") } }
     var appearance: Appearance { didSet { defaults.set(try? JSONEncoder().encode(appearance), forKey: "appearance") } }
-    var autoUpdateEngine: Bool {
+    /// Scheduled checks for a newer nxnative and a newer launcher. What they find is offered, never installed unasked.
+    var autoCheckEngine: Bool {
         didSet {
-            defaults.set(autoUpdateEngine, forKey: "autoUpdateEngine")
-            if autoUpdateEngine { Task { await checkForEngineUpdate(auto: true) } }
+            defaults.set(autoCheckEngine, forKey: "autoUpdateEngine")
+            if autoCheckEngine { Task { await checkForEngineUpdate(auto: true) } }
+        }
+    }
+    var autoCheckLauncher: Bool {
+        didSet {
+            defaults.set(autoCheckLauncher, forKey: "autoCheckLauncher")
+            if autoCheckLauncher { Task { await checkForLauncherUpdate(auto: true) } }
         }
     }
 
@@ -79,9 +99,12 @@ final class AppModel {
     private(set) var engineSource: Preflight.EngineSource = .custom
     /// The managed engine's commit, from its stamp.
     private(set) var installedEngine: Engine.Version?
-    private(set) var engineUpdate: EngineUpdateState = .idle
-    /// An update waiting for the build queue to empty: the engine folder is never swapped under a build.
+    private(set) var engineUpdate: UpdateState<EngineUpdate.Status> = .idle
+    private(set) var launcherUpdate: UpdateState<LauncherUpdate.Release> = .idle
+    /// Updates waiting for the build queue to empty: neither the engine nor the launcher is replaced under a build.
     private(set) var engineUpdateWaits = false
+    private(set) var launcherUpdateWaits = false
+    var updatePrompt: UpdatePrompt?
     /// The checks whose fix is running, and the last line each one wrote (or its error).
     private(set) var fixing: Set<String> = []
     private(set) var fixStatus: [String: String] = [:]
@@ -97,7 +120,8 @@ final class AppModel {
         keysPath = defaults.string(forKey: "keysPath") ?? ""
         pythonPath = defaults.string(forKey: "pythonPath") ?? Preflight.findPython()?.path ?? ""
         appearance = defaults.data(forKey: "appearance").flatMap { try? JSONDecoder().decode(Appearance.self, from: $0) } ?? Appearance()
-        autoUpdateEngine = defaults.object(forKey: "autoUpdateEngine") as? Bool ?? true
+        autoCheckEngine = defaults.object(forKey: "autoUpdateEngine") as? Bool ?? true
+        autoCheckLauncher = defaults.object(forKey: "autoCheckLauncher") as? Bool ?? true
         library = store.load(LibraryState.self, "library.json") ?? LibraryState()
         playtime = store.load(PlaytimeLog.self, "playtime.json") ?? PlaytimeLog()
         playtime.closeStale()
@@ -112,9 +136,10 @@ final class AppModel {
             MainActor.assumeIsolated { self?.beat() }
         }
         updateTimer = Timer.scheduledTimer(withTimeInterval: Self.updateInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { guard let self, self.autoUpdateEngine else { return }; Task { await self.checkForEngineUpdate(auto: true) } }
+            MainActor.assumeIsolated { self?.checkForUpdatesIfDue() }
         }
         Task { await runPreflight() }
+        checkForUpdatesIfDue()
     }
 
     // MARK: Library
@@ -159,9 +184,7 @@ final class AppModel {
         engineSource = .bundled(version: version.sha)
         installedEngine = version
         reloadCatalog()
-        if autoUpdateEngine, Date().timeIntervalSince(lastEngineCheck ?? .distantPast) > Self.updateInterval {
-            Task { await checkForEngineUpdate(auto: true) }
-        }
+        checkForUpdatesIfDue()
     }
 
     func useBundledEngine() {
@@ -175,16 +198,46 @@ final class AppModel {
     /// Whether the managed engine is the app's own copy, not one updated from GitHub.
     var engineIsBundledCopy: Bool { installedEngine != nil && installedEngine?.sha == Engine.bundled()?.version.sha }
 
-    // MARK: Engine updates
+    // MARK: Updates
 
     static let updateInterval: TimeInterval = 6 * 60 * 60
 
-    private var lastEngineCheck: Date? {
-        get { defaults.object(forKey: "lastEngineCheck") as? Date }
-        set { defaults.set(newValue, forKey: "lastEngineCheck") }
+    private func lastCheck(_ key: String) -> Date? { defaults.object(forKey: key) as? Date }
+
+    /// The scheduled checks: at launch and every six hours, each when its switch is on.
+    private func checkForUpdatesIfDue() {
+        let due = { (key: String) in Date().timeIntervalSince(self.lastCheck(key) ?? .distantPast) > Self.updateInterval }
+        if autoCheckEngine, installedEngine != nil, due("lastEngineCheck") { Task { await checkForEngineUpdate(auto: true) } }
+        if autoCheckLauncher, due("lastLauncherCheck") { Task { await checkForLauncherUpdate(auto: true) } }
     }
 
-    /// Asks GitHub whether nxnative's main branch has moved past the installed commit. With `auto`, an update found is installed.
+    /// Offers an update a scheduled check found, unless the user already said Later to this one.
+    private func offer(_ prompt: UpdatePrompt, skipKey: String, skipValue: String) {
+        guard defaults.string(forKey: skipKey) != skipValue, updatePrompt == nil else { return }
+        updatePrompt = prompt
+    }
+
+    /// Later: the prompt is not shown again for this version. Settings still offers it.
+    func dismissUpdatePrompt() {
+        switch updatePrompt {
+        case .engine(let s): defaults.set(s.latest.version.sha, forKey: "skippedEngine")
+        case .launcher(let r): defaults.set(r.version, forKey: "skippedLauncher")
+        case nil: break
+        }
+        updatePrompt = nil
+    }
+
+    func acceptUpdatePrompt() {
+        let prompt = updatePrompt
+        updatePrompt = nil
+        switch prompt {
+        case .engine: Task { await updateEngine() }
+        case .launcher: Task { await updateLauncher() }
+        case nil: break
+        }
+    }
+
+    /// Asks GitHub whether nxnative's main branch has moved past the installed commit. With `auto`, an update found is offered.
     func checkForEngineUpdate(auto: Bool = false) async {
         guard usesBundledEngine, let installed = installedEngine else { return }
         switch engineUpdate { case .checking, .updating: return; default: break }
@@ -192,10 +245,10 @@ final class AppModel {
         engineUpdate = .checking
         do {
             let status = try await EngineUpdate.check(installed: installed)
-            lastEngineCheck = Date()
+            defaults.set(Date(), forKey: "lastEngineCheck")
             guard usesBundledEngine, installedEngine == installed else { engineUpdate = .idle; return }
             engineUpdate = status.isNewer ? .available(status) : .upToDate(checked: Date())
-            if status.isNewer && auto { await updateEngine() }
+            if status.isNewer && auto { offer(.engine(status), skipKey: "skippedEngine", skipValue: status.latest.version.sha) }
         } catch {
             // A quiet check that fails (offline, say) is only noted; the next one runs on schedule.
             engineUpdate = .failed(error.localizedDescription)
@@ -226,6 +279,52 @@ final class AppModel {
             engineUpdate = .failed("could not update: \(error.localizedDescription)")
         }
         await runPreflight()
+    }
+
+    /// The running launcher's version, from its Info.plist. A `swift run` build has none and is never updated.
+    var launcherVersion: String? { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String }
+
+    /// Asks GitHub for the launcher's latest release. With `auto`, a newer one is offered.
+    func checkForLauncherUpdate(auto: Bool = false) async {
+        guard let current = launcherVersion else { return }
+        switch launcherUpdate { case .checking, .updating: return; default: break }
+        launcherUpdate = .checking
+        do {
+            let release = try await LauncherUpdate.check(current: current)
+            defaults.set(Date(), forKey: "lastLauncherCheck")
+            launcherUpdate = release.map { .available($0) } ?? .upToDate(checked: Date())
+            if let release, auto { offer(.launcher(release), skipKey: "skippedLauncher", skipValue: release.version) }
+        } catch {
+            launcherUpdate = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Downloads the new launcher, checks it, and relaunches into it. While a build is queued or running it waits for the queue:
+    /// quitting would stop the build.
+    func updateLauncher() async {
+        guard case .available(let release) = launcherUpdate, let bundleID = Bundle.main.bundleIdentifier else { return }
+        let app = Bundle.main.bundleURL
+        if let why = LauncherUpdate.cannotReplace(app) { launcherUpdate = .failed(why); return }
+        if activeCount > 0 { launcherUpdateWaits = true; return }
+        launcherUpdateWaits = false
+        launcherUpdate = .updating
+        do {
+            let staged = try await LauncherUpdate.download(release, bundleID: bundleID, to: store.folder.appending(path: "Downloads"))
+            // A build queued while it downloaded keeps the launcher running; the update goes in when the queue empties.
+            if activeCount > 0 { launcherUpdate = .available(release); launcherUpdateWaits = true; return }
+            beat()
+            try LauncherUpdate.relaunch(replacing: app, with: staged)
+            NSApp.terminate(nil)
+        } catch {
+            launcherUpdate = .failed("could not update: \(error.localizedDescription)")
+        }
+    }
+
+    /// The build queue emptied: put in what was waiting for it.
+    private func runWaitingUpdates() {
+        guard activeCount == 0 else { return }
+        if engineUpdateWaits { Task { await updateEngine() } }
+        if launcherUpdateWaits { Task { await updateLauncher() } }
     }
 
     func reloadCatalog() {
@@ -471,7 +570,7 @@ final class AppModel {
         job.runner = nil
         updateDock()
         startNextBuild()
-        if engineUpdateWaits && activeCount == 0 { Task { await updateEngine() } }
+        runWaitingUpdates()
     }
 
     /// No path in the script's output: the newest nxnative app in the NSP folder (or beside -o) changed since the build started.
@@ -492,7 +591,7 @@ final class AppModel {
         if let runner = job.runner { runner.cancel() }
         else if job.isActive {
             job.outcome = .cancelled; job.progress.phase = .cancelled
-            if engineUpdateWaits && activeCount == 0 { Task { await updateEngine() } }
+            runWaitingUpdates()
         }
     }
 

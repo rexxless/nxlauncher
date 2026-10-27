@@ -20,6 +20,9 @@ struct SettingsView: View {
                     if model.usesBundledEngine { EngineUpdateRows() }
                     PathRow(label: "Python 3", path: $model.pythonPath, directory: false)
                 }
+                card("Launcher", footer: "Updates come from the launcher's releases on GitHub. Installing one quits the launcher and opens the new version; your library, playtime and settings carry over.") {
+                    LauncherUpdateRows()
+                }
                 card("Keys", focus: .keys, footer: "Only the file's location is stored, on this Mac. The launcher passes it to nxnative and never opens or shows the file.") {
                     PathRow(label: "prod.keys", path: $model.keysPath, directory: false, showsPath: false)
                 }
@@ -260,7 +263,7 @@ struct EngineRow: View {
     }
 }
 
-/// The managed engine's commit, the update check with its Update button, and the auto-update switch.
+/// The managed engine's commit, the update check with its Update button, and the switch for scheduled checks.
 struct EngineUpdateRows: View {
     @Environment(AppModel.self) private var model
 
@@ -284,7 +287,7 @@ struct EngineUpdateRows: View {
         }
         HStack {
             Text("Auto-update").frame(width: 150, alignment: .leading)
-            Toggle("Update nxnative automatically", isOn: $model.autoUpdateEngine)
+            Toggle("Check for new nxnative and ask before installing", isOn: $model.autoCheckEngine)
             Spacer()
         }
     }
@@ -331,9 +334,162 @@ struct EngineUpdateRows: View {
     }
 }
 
+/// The running launcher's version, the check for a newer release with its Update button, and the switch for scheduled checks.
+struct LauncherUpdateRows: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        HStack {
+            Text("Version").frame(width: 150, alignment: .leading)
+            if let v = model.launcherVersion { Text(v).monospaced() } else { Text("development build, not updated").foregroundStyle(.white.opacity(0.6)) }
+            Spacer()
+        }
+        if model.launcherVersion != nil {
+            HStack(spacing: 10) {
+                Text("Updates").frame(width: 150, alignment: .leading)
+                status.frame(maxWidth: .infinity, alignment: .leading)
+                actions
+            }
+            HStack {
+                Text("Auto-update").frame(width: 150, alignment: .leading)
+                Toggle("Check for new versions and ask before installing", isOn: $model.autoCheckLauncher)
+                Spacer()
+            }
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        switch model.launcherUpdate {
+        case .idle: Text("Not checked yet").foregroundStyle(.white.opacity(0.6))
+        case .checking: HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Checking…") }
+        case .upToDate(let checked):
+            Label("Up to date · checked \(checked.formatted(.relative(presentation: .named)))", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.white.opacity(0.85))
+        case .available(let r):
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.green)
+                    Text("Version \(r.version)").fontWeight(.semibold)
+                    Link("See Changelog", destination: r.page).fontWeight(.semibold)
+                }
+                if model.launcherUpdateWaits { Text("Updates when the builds finish").font(.caption).foregroundStyle(.white.opacity(0.65)) }
+            }
+        case .updating: HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Downloading…") }
+        case .failed(let msg): Text(msg).foregroundStyle(.yellow).lineLimit(2)
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        switch model.launcherUpdate {
+        case .available:
+            Button { Task { await model.updateLauncher() } } label: { Label("Update and Relaunch", systemImage: "arrow.down.circle") }
+                .launcherButton(prominent: true).disabled(model.launcherUpdateWaits)
+        case .checking, .updating: EmptyView()
+        case .failed: Button("Try Again") { Task { await model.checkForLauncherUpdate() } }.launcherButton()
+        case .idle, .upToDate: Button("Check Now") { Task { await model.checkForLauncherUpdate() } }.launcherButton()
+        }
+    }
+}
+
+/// What a scheduled check found: the new version, what changed and a link to the full list. Nothing installs until Update.
+struct UpdatePromptSheet: View {
+    @Environment(AppModel.self) private var model
+    let prompt: UpdatePrompt
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.down.circle.fill").font(.system(size: 34)).foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.title2.weight(.bold))
+                    Text(subtitle).foregroundStyle(.secondary)
+                }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) { changes }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+            }
+            .frame(height: 240)
+            .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 10))
+            HStack {
+                Link(linkTitle, destination: link).fontWeight(.semibold)
+                Spacer()
+                Button("Later") { model.dismissUpdatePrompt() }.keyboardShortcut(.cancelAction)
+                Button(updateTitle) { model.acceptUpdatePrompt() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+            }
+            if model.activeCount > 0 {
+                Text("A build is running: the update goes in when the builds finish.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(24)
+        .frame(width: 560)
+    }
+
+    private var title: String {
+        switch prompt {
+        case .engine: "A new nxnative is available"
+        case .launcher(let r): "nxnative Launcher \(r.version) is available"
+        }
+    }
+
+    private var subtitle: String {
+        switch prompt {
+        case .engine(let s):
+            let installed = model.installedEngine.map { Engine.shortVersion($0.sha) } ?? "?"
+            let count = s.aheadBy.map { " · \($0) new commit\($0 == 1 ? "" : "s")" } ?? ""
+            return "\(installed) → \(Engine.shortVersion(s.latest.version.sha))\(count)"
+        case .launcher: return "You have \(model.launcherVersion ?? "?")"
+        }
+    }
+
+    @ViewBuilder private var changes: some View {
+        switch prompt {
+        case .engine(let s):
+            ForEach(s.changes, id: \.version.sha) { c in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(Engine.shortVersion(c.version.sha)).monospaced().foregroundStyle(.secondary)
+                    Text(c.message)
+                }
+                .font(.callout)
+            }
+            if let n = s.aheadBy, n > s.changes.count { Text("and \(n - s.changes.count) more").font(.callout).foregroundStyle(.secondary) }
+        case .launcher(let r):
+            Text((try? AttributedString(markdown: LauncherUpdate.changes(in: r.notes),
+                                        options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(r.notes))
+                .font(.callout).textSelection(.enabled)
+        }
+    }
+
+    private var link: URL {
+        switch prompt {
+        case .engine(let s): EngineUpdate.compareURL(from: model.installedEngine?.sha ?? s.latest.version.sha, to: s.latest.version.sha)
+        case .launcher(let r): r.page
+        }
+    }
+
+    private var linkTitle: String {
+        switch prompt {
+        case .engine: "See All Changes"
+        case .launcher: "See Changelog"
+        }
+    }
+
+    private var updateTitle: String {
+        switch prompt {
+        case .engine: "Update nxnative"
+        case .launcher: "Update and Relaunch"
+        }
+    }
+}
+
 struct Credits: View {
     var body: some View {
         HStack(spacing: 6) {
+            Image(systemName: "hammer.fill").foregroundStyle(.white.opacity(0.75))
+            Text("Built by")
+            Link("rexxless", destination: URL(string: "https://github.com/rexxless")!).fontWeight(.semibold)
+            Text("·").padding(.horizontal, 4)
             Image(systemName: "heart.fill").foregroundStyle(.pink)
             Text("Powered by")
             Link("nxnative", destination: URL(string: "https://github.com/seedds/nxnative")!).fontWeight(.semibold)

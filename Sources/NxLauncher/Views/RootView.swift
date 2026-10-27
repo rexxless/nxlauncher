@@ -28,6 +28,7 @@ struct RootView: View {
         .environment(\.colorScheme, .dark)
         .frame(minWidth: 980, minHeight: 640)
         .sheet(isPresented: $model.showingAddGame) { AddGameSheet() }
+        .sheet(item: $model.updatePrompt) { UpdatePromptSheet(prompt: $0) }
         .animation(.smooth(duration: 0.35), value: model.detail)
         .animation(.smooth(duration: 0.3), value: model.route)
         .task { await Snapshot.runIfRequested(model) }
